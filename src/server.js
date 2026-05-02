@@ -838,7 +838,7 @@ function buildOnboardArgs(payload) {
 
 function runCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const { onOutput, stripOutput, ...spawnOpts } = opts;
+    const { autoInputs: _autoInputs, onOutput, stripOutput, ...spawnOpts } = opts;
     const proc = childProcess.spawn(cmd, args, {
       ...spawnOpts,
       env: {
@@ -870,6 +870,8 @@ function runCmd(cmd, args, opts = {}) {
 function runPtyCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     let out = "";
+    const autoInputs = opts.autoInputs ?? [];
+    const sentAutoInputs = new Set();
     let proc;
     try {
       proc = pty.spawn(cmd, args, {
@@ -903,6 +905,12 @@ function runPtyCmd(cmd, args, opts = {}) {
       const chunk = opts.cleanOutput ? cleanPtyOutput(data) : stripAnsi(data);
       if (!chunk) return;
       out += chunk;
+      for (const { input, pattern } of autoInputs) {
+        const key = String(pattern);
+        if (sentAutoInputs.has(key) || !pattern.test(out)) continue;
+        sentAutoInputs.add(key);
+        proc.write(input);
+      }
       opts.onOutput?.(chunk);
     });
 
@@ -1032,6 +1040,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       onOutput: stream,
       cleanOutput: interactive,
       stripOutput: !interactive,
+      autoInputs: interactive ? [{ pattern: /Enable hooks\?/, input: " \r" }] : [],
     });
 
     const ok = onboard.code === 0 && isConfigured();
