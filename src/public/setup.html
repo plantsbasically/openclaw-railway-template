@@ -32,6 +32,10 @@
       slackAppToken: '',
       model: '',
       log: '',
+      loginUrl: '',
+      loginCode: '',
+      setupError: '',
+      setupStreamTail: '',
       loading: false,
       pairingChannel: '',
       pairingCode: '',
@@ -48,6 +52,31 @@
 
       get currentGroup() {
         return this.authGroups.find(g => g.value === this.selectedGroup);
+      },
+
+      get authRequiresSecret() {
+        return ![
+          'openai-codex',
+          'openai-codex-device-code',
+          'google-gemini-cli',
+          'github-copilot',
+          'ollama',
+          'vllm',
+          'sglang'
+        ].includes(this.selectedAuth);
+      },
+
+      get authGuidance() {
+        if (this.selectedAuth === 'openai-codex-device-code') {
+          return 'Run setup, then open the ChatGPT/Codex URL and enter the device code shown in the log.';
+        }
+        if (this.selectedAuth === 'openai-codex') {
+          return 'Browser login needs an interactive terminal to paste the redirect URL. Device pairing is recommended here.';
+        }
+        if (!this.authRequiresSecret) {
+          return 'No API key is needed for this auth method.';
+        }
+        return '';
       },
 
       async init() {
@@ -101,6 +130,10 @@
       },
 
       async runSetup() {
+        this.loginUrl = '';
+        this.loginCode = '';
+        this.setupError = '';
+        this.setupStreamTail = '';
         const payload = {
           authChoice: this.selectedAuth,
           authSecret: this.authSecret,
@@ -126,15 +159,57 @@
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload)
           });
-          const text = await res.text();
-          let j;
-          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
-          this.log += (j.output || JSON.stringify(j, null, 2));
+          if (res.body) {
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              this.processSetupChunk(decoder.decode(value, { stream: true }));
+              this.$nextTick(() => {
+                const el = this.$refs.setupLog;
+                if (el) el.scrollTop = el.scrollHeight;
+              });
+            }
+            this.processSetupChunk(decoder.decode());
+          } else {
+            this.processSetupChunk(await res.text());
+          }
+          if (!res.ok && !this.setupError) {
+            this.setupError = 'Setup request failed with HTTP ' + res.status + '.';
+          }
           await this.refreshStatus();
         } catch (e) {
-          this.log += '\nError: ' + String(e) + '\n';
+          this.setupError = 'Setup request failed.';
+          this.processSetupChunk('\nError: ' + String(e) + '\n');
         } finally {
           this.loading = false;
+        }
+      },
+
+      processSetupChunk(chunk) {
+        if (!chunk) return;
+        this.log += chunk;
+        const scanText = this.setupStreamTail + chunk;
+        this.setupStreamTail = scanText.slice(-1000);
+        this.extractLoginDetails(scanText);
+        this.extractSetupFailure(scanText);
+      },
+
+      extractLoginDetails(text) {
+        const urlMatch = text.match(/https:\/\/auth\.openai\.com\/codex\/device[^\s)]*/);
+        if (urlMatch) this.loginUrl = urlMatch[0];
+
+        const codeMatches = [...text.matchAll(/\bCode:\s*([A-Z0-9][A-Z0-9-]{3,})\b/g)];
+        const visibleCode = codeMatches.map(m => m[1]).find(code => code !== 'shown');
+        if (visibleCode) this.loginCode = visibleCode;
+      },
+
+      extractSetupFailure(text) {
+        if (text.includes('[setup] Internal error')) {
+          this.setupError = 'Setup hit an internal error. Review the log below.';
+        } else if (text.includes('[setup] Failed')) {
+          this.setupError = 'Setup failed. Review the log below.';
         }
       },
 
@@ -521,9 +596,10 @@
                 <option :value="o.value" x-text="o.label + (o.hint ? ' — ' + o.hint : '')"></option>
               </template>
             </select>
+            <p x-show="authGuidance" class="form-hint" x-text="authGuidance"></p>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" x-show="authRequiresSecret">
             <label class="label">API Key / Token</label>
             <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="input" />
           </div>
@@ -563,7 +639,7 @@
 
           <div class="form-group">
             <label class="label">Model</label>
-            <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="input" />
+            <input x-model="model" type="text" placeholder="e.g. openai-codex/gpt-5.5, openai/gpt-4.1" class="input" />
             <p class="form-hint">Format: provider/model-name</p>
           </div>
         </div>
@@ -660,7 +736,17 @@
             </button>
           </div>
 
-          <div x-show="log" class="log-output" x-text="log"></div>
+          <div x-show="loginUrl || loginCode" class="login-code-panel">
+            <div>
+              <p class="login-code-label">ChatGPT Login</p>
+              <a x-show="loginUrl" :href="loginUrl" target="_blank" rel="noopener noreferrer" class="login-code-url" x-text="loginUrl"></a>
+            </div>
+            <div x-show="loginCode" class="login-code-value" x-text="loginCode"></div>
+          </div>
+
+          <div x-show="setupError" class="setup-error-panel" x-text="setupError"></div>
+
+          <div x-show="log" x-ref="setupLog" class="log-output" x-text="log"></div>
 
           <p class="text-xs text-muted mt-4">Reset deletes the config file so you can rerun onboarding. Channel access approval grants DM access when dmPolicy=pairing.</p>
         </div>
