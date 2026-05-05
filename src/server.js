@@ -113,6 +113,8 @@ const INTERNAL_GATEWAY_PORT = Number.parseInt(
   process.env.INTERNAL_GATEWAY_PORT ?? "18789",
   10,
 );
+// This is the wrapper's upstream target host, not an OpenClaw --bind mode.
+// Railway exposes the Express wrapper on PORT; the gateway stays private.
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
 
@@ -354,6 +356,8 @@ async function startGateway() {
     "gateway",
     "run",
     "--bind",
+    // Intentional for Railway: only the wrapper is public, and it proxies to the
+    // gateway over loopback while injecting auth.
     "loopback",
     "--port",
     String(INTERNAL_GATEWAY_PORT),
