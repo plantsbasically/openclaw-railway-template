@@ -1502,6 +1502,183 @@ app.get("/setup/api/export", requireSetupAuth, async (_req, res) => {
   }
 });
 
+app.post(
+  "/setup/api/import",
+  requireSetupAuth,
+  express.raw({ type: "application/zip", limit: "250mb" }),
+  async (req, res) => {
+    const dataRoot = "/data";
+    const isUnder = (p) => {
+      const abs = path.resolve(p);
+      return abs === dataRoot || abs.startsWith(dataRoot + path.sep);
+    };
+
+    if (!isUnder(STATE_DIR) || !isUnder(WORKSPACE_DIR)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Import only supported when state/workspace dirs are under /data.",
+      });
+    }
+
+    const buf = req.body;
+    if (!Buffer.isBuffer(buf) || buf.length === 0) {
+      return res.status(400).json({ ok: false, error: "Empty or invalid request body." });
+    }
+
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    const tmpZip = path.join(dataRoot, `.import-${ts}.zip`);
+    const tmpExtract = path.join(dataRoot, `.import-extract-${ts}`);
+    const stateAbs = path.resolve(STATE_DIR);
+    const workspaceAbs = path.resolve(WORKSPACE_DIR);
+    // Archive entries are stored relative — `zip` strips the leading "/" from
+    // absolute paths it was given, so /data/.openclaw becomes data/.openclaw.
+    const stateRel = stateAbs.replace(/^\//, "");
+    const workspaceRel = workspaceAbs.replace(/^\//, "");
+    const allowedPrefixes = [stateRel, workspaceRel];
+    const cleanup = () => {
+      try { fs.rmSync(tmpZip, { force: true }); } catch {}
+      try { fs.rmSync(tmpExtract, { recursive: true, force: true }); } catch {}
+    };
+
+    const reject = (status, error, extra = {}) => {
+      const e = new Error(error);
+      e.status = status;
+      e.extra = extra;
+      return e;
+    };
+    const walkRejectSymlinks = (dir) => {
+      const st = fs.lstatSync(dir);
+      if (st.isSymbolicLink()) {
+        const rel = path.relative(tmpExtract, dir) || path.basename(dir);
+        throw reject(400, `Refusing symlink in archive: ${rel}`);
+      }
+      if (st.isDirectory()) {
+        for (const name of fs.readdirSync(dir)) {
+          walkRejectSymlinks(path.join(dir, name));
+        }
+        return;
+      }
+      if (!st.isFile()) {
+        const rel = path.relative(tmpExtract, dir) || path.basename(dir);
+        throw reject(400, `Refusing non-regular entry in archive: ${rel}`);
+      }
+    };
+
+    const backups = [];
+    let gatewayWasStopped = false;
+    try {
+      fs.writeFileSync(tmpZip, buf);
+
+      // Pre-validate every archive entry. Reject anything that isn't under one
+      // of the configured state/workspace prefixes — the archive is gated by
+      // SETUP_PASSWORD but we never want a malformed or hand-crafted backup to
+      // write outside /data.
+      // -Z (ZipInfo) doesn't accept -P; entry names aren't encrypted so we
+      // don't need the password just to list them.
+      const list = await runCmd("unzip", ["-Z1", tmpZip]);
+      if (list.code !== 0) {
+        throw reject(
+          400,
+          "Failed to read archive. Check the file and that SETUP_PASSWORD matches.",
+          { output: list.output },
+        );
+      }
+      const entries = list.output.split("\n").map((s) => s.trim()).filter(Boolean);
+      const entryAllowed = (e) => {
+        if (e.startsWith("/") || /^[A-Za-z]:[\\/]/.test(e)) return false;
+        const norm = e.replace(/\\/g, "/").replace(/\/+$/, "");
+        if (norm.split("/").includes("..")) return false;
+        return allowedPrefixes.some((p) => norm === p || norm.startsWith(p + "/"));
+      };
+      const bad = entries.filter((e) => !entryAllowed(e));
+      if (bad.length) {
+        throw reject(
+          400,
+          `Archive contains ${bad.length} entries outside ${STATE_DIR} / ${WORKSPACE_DIR}. ` +
+            `First few: ${bad.slice(0, 3).join(", ")}`,
+        );
+      }
+
+      if (gatewayProc) {
+        intentionalRestart = true;
+        try {
+          gatewayProc.kill("SIGTERM");
+        } catch (err) {
+          log.warn("import", `kill error: ${err.message}`);
+        }
+        await sleep(750);
+        gatewayProc = null;
+        intentionalRestart = false;
+        gatewayWasStopped = true;
+      }
+
+      // Extract into a sibling directory under /data so renames into
+      // STATE_DIR / WORKSPACE_DIR are intra-volume (atomic on POSIX).
+      fs.mkdirSync(tmpExtract, { recursive: true });
+      const extractResult = await runCmd("unzip", ["-P", SETUP_PASSWORD, "-o", tmpZip, "-d", tmpExtract]);
+      if (extractResult.code !== 0) {
+        log.error("import", `unzip exit ${extractResult.code}: ${extractResult.output}`);
+        throw reject(500, "Failed to extract archive.", { output: extractResult.output });
+      }
+
+      // unzip can restore symlinks (zip -y) and other non-regular entries that
+      // would let a crafted archive smuggle e.g. data/.openclaw → /etc. Walk
+      // the extracted tree with lstat and reject anything that isn't a plain
+      // dir or file before we move it into place.
+      walkRejectSymlinks(tmpExtract);
+
+      // Replace each target dir wholesale: rename target → backup, then move
+      // extracted dir into place. Skips dirs absent from the backup so a
+      // partial archive doesn't wipe an unrelated dir.
+      const replacements = [
+        { target: stateAbs, source: path.join(tmpExtract, stateRel) },
+        { target: workspaceAbs, source: path.join(tmpExtract, workspaceRel) },
+      ];
+      for (const { target, source } of replacements) {
+        if (!fs.existsSync(source)) continue;
+        // Even after walkRejectSymlinks, the entry at the source path itself
+        // could be a regular file masquerading as data/.openclaw. Require an
+        // actual directory before swapping it in for STATE_DIR / WORKSPACE_DIR.
+        if (!fs.lstatSync(source).isDirectory()) {
+          throw reject(
+            400,
+            `Archive entry ${path.relative(tmpExtract, source)} is not a directory.`,
+          );
+        }
+        const backup = `${target}.bak-${ts}`;
+        if (fs.existsSync(target)) {
+          fs.renameSync(target, backup);
+          backups.push({ target, backup });
+        }
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.renameSync(source, target);
+      }
+
+      for (const { backup } of backups) {
+        try { fs.rmSync(backup, { recursive: true, force: true }); } catch {}
+      }
+      backups.length = 0;
+
+      log.info("import", `restored ${buf.length} bytes from archive`);
+      await restartGateway();
+      return res.json({ ok: true, output: extractResult.output });
+    } catch (err) {
+      const status = err.status ?? 500;
+      const extra = err.extra ?? {};
+      if (status >= 500) log.error("import", `error: ${err.message}`);
+      // Roll back any partial replacement.
+      for (const { target, backup } of backups) {
+        try { fs.rmSync(target, { recursive: true, force: true }); } catch {}
+        try { fs.renameSync(backup, target); } catch {}
+      }
+      if (gatewayWasStopped) await ensureGatewayRunning().catch(() => {});
+      return res.status(status).json({ ok: false, error: err.message, ...extra });
+    } finally {
+      cleanup();
+    }
+  },
+);
+
 app.get("/logs", requireSetupAuth, (_req, res) => {
   res.sendFile(path.join(process.cwd(), "src", "public", "logs.html"));
 });
