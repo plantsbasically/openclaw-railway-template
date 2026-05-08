@@ -47,6 +47,7 @@
       tuiEnabled: false,
       exporting: false,
       showExportInfo: false,
+      importing: false,
       showDevicesModal: false,
       devicesLoading: false,
       devices: [],
@@ -353,6 +354,40 @@
         }
       },
 
+      async importData(event) {
+        const f = event.target.files && event.target.files[0];
+        event.target.value = '';
+        if (!f) return;
+        if (!confirm('Import backup? This overwrites your config and workspace under /data and restarts the gateway.')) return;
+
+        this.importing = true;
+        this.log = 'Uploading ' + f.name + ' (' + f.size + ' bytes)...\n';
+
+        try {
+          const buf = await f.arrayBuffer();
+          const res = await fetch('/setup/api/import', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/zip' },
+            body: buf,
+          });
+          const text = await res.text();
+          let j;
+          try { j = JSON.parse(text); } catch (_e) { j = { ok: res.ok, output: text }; }
+          if (j.output) this.log += j.output + '\n';
+          if (res.ok && j.ok) {
+            this.log += '✓ Import complete. Gateway restarted.\n';
+            await this.refreshStatus();
+          } else {
+            this.log += '✗ Import failed: ' + (j.error || text) + '\n';
+          }
+        } catch (e) {
+          this.log += '✗ Import error: ' + String(e) + '\n';
+        } finally {
+          this.importing = false;
+        }
+      },
+
       async openDevicesModal() {
         this.showDevicesModal = true;
         await this.loadDevices();
@@ -539,6 +574,24 @@
               <span x-show="exporting" style="display:inline-flex;align-items:center;justify-content:center;gap:0.5rem">
                 <svg class="spinner-inline" fill="none" viewBox="0 0 24 24"><circle style="opacity:0.25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path style="opacity:0.75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                 Exporting...
+              </span>
+            </button>
+          </div>
+
+          <div class="action-card action-violet">
+            <div class="action-card-header">
+              <div class="action-icon">
+                <svg class="icon-md" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              </div>
+              <span class="action-title">Import Data</span>
+            </div>
+            <p class="action-desc">Restore from a password-protected ZIP. Overwrites config and workspace, then restarts the gateway.</p>
+            <input x-ref="importInput" @change="importData($event)" type="file" accept=".zip,application/zip" style="display:none" />
+            <button @click="$refs.importInput.click()" :disabled="loading || importing || exporting" class="action-btn">
+              <span x-show="!importing">Import Data</span>
+              <span x-show="importing" style="display:inline-flex;align-items:center;justify-content:center;gap:0.5rem">
+                <svg class="spinner-inline" fill="none" viewBox="0 0 24 24"><circle style="opacity:0.25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path style="opacity:0.75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                Importing...
               </span>
             </button>
           </div>
