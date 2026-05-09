@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>🦞 OpenClaw — Personal AI Assistant</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script>
   document.addEventListener('alpine:init', () => {
     Alpine.data('setupApp', () => ({
@@ -48,6 +45,9 @@
       exporting: false,
       showExportInfo: false,
       importing: false,
+      showImportModal: false,
+      pendingImportFile: null,
+      importArchivePassword: '',
       showDevicesModal: false,
       devicesLoading: false,
       devices: [],
@@ -354,11 +354,31 @@
         }
       },
 
-      async importData(event) {
+      onImportFileSelected(event) {
         const f = event.target.files && event.target.files[0];
         event.target.value = '';
         if (!f) return;
-        if (!confirm('Import backup? This overwrites your config and workspace under /data and restarts the gateway.')) return;
+        this.pendingImportFile = f;
+        this.importArchivePassword = '';
+        this.showImportModal = true;
+      },
+
+      cancelImport() {
+        if (this.importing) return;
+        this.showImportModal = false;
+        this.pendingImportFile = null;
+        this.importArchivePassword = '';
+      },
+
+      async confirmImport() {
+        const f = this.pendingImportFile;
+        if (!f) return;
+
+        const headers = { 'content-type': 'application/zip' };
+        const pw = (this.importArchivePassword || '').trim();
+        if (pw) {
+          headers['x-archive-password'] = btoa(unescape(encodeURIComponent(pw)));
+        }
 
         this.importing = true;
         this.log = 'Uploading ' + f.name + ' (' + f.size + ' bytes)...\n';
@@ -368,7 +388,7 @@
           const res = await fetch('/setup/api/import', {
             method: 'POST',
             credentials: 'same-origin',
-            headers: { 'content-type': 'application/zip' },
+            headers,
             body: buf,
           });
           const text = await res.text();
@@ -377,6 +397,9 @@
           if (j.output) this.log += j.output + '\n';
           if (res.ok && j.ok) {
             this.log += '✓ Import complete. Gateway restarted.\n';
+            this.showImportModal = false;
+            this.pendingImportFile = null;
+            this.importArchivePassword = '';
             await this.refreshStatus();
           } else {
             this.log += '✗ Import failed: ' + (j.error || text) + '\n';
@@ -586,7 +609,7 @@
               <span class="action-title">Import Data</span>
             </div>
             <p class="action-desc">Restore from a password-protected ZIP. Overwrites config and workspace, then restarts the gateway.</p>
-            <input x-ref="importInput" @change="importData($event)" type="file" accept=".zip,application/zip" style="display:none" />
+            <input x-ref="importInput" @change="onImportFileSelected($event)" type="file" accept=".zip,application/zip" style="display:none" />
             <button @click="$refs.importInput.click()" :disabled="loading || importing || exporting" class="action-btn">
               <span x-show="!importing">Import Data</span>
               <span x-show="importing" style="display:inline-flex;align-items:center;justify-content:center;gap:0.5rem">
@@ -606,6 +629,19 @@
             <p class="action-desc">Stream server logs in real-time for debugging and monitoring.</p>
             <a href="/logs" target="_blank" class="action-btn" style="display:block;text-align:center;text-decoration:none">
               View Logs
+            </a>
+          </div>
+
+          <div class="action-card action-violet">
+            <div class="action-card-header">
+              <div class="action-icon">
+                <svg class="icon-md" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+              </div>
+              <span class="action-title">Edit Config</span>
+            </div>
+            <p class="action-desc">Directly edit <code>openclaw.json</code>. Creates a backup and restarts the gateway on save.</p>
+            <a href="/setup/config" class="action-btn" style="display:block;text-align:center;text-decoration:none">
+              Edit Config
             </a>
           </div>
         </div>
@@ -921,6 +957,39 @@
           <code class="code-block">7z x -pYOUR_PASSWORD openclaw-export-*.zip</code>
         </div>
         <button @click="showExportInfo = false" class="btn-close-full">Close</button>
+      </div>
+    </div>
+
+    <div x-show="showImportModal" x-cloak class="modal-overlay" @click.self="cancelImport()">
+      <div class="modal-card modal-md">
+        <h3 class="modal-title mb-4">Import Backup</h3>
+        <p class="text-sm text-muted mb-4">
+          Restoring <strong x-text="pendingImportFile?.name"></strong>
+          (<span x-text="pendingImportFile ? Math.round(pendingImportFile.size / 1024) + ' KB' : ''"></span>).
+          This overwrites your config and workspace under <code>/data</code>, then restarts the gateway.
+        </p>
+        <div class="form-group">
+          <label class="label">Archive password</label>
+          <input
+            x-model="importArchivePassword"
+            type="password"
+            autocomplete="off"
+            placeholder="Leave blank to use this instance's SETUP_PASSWORD"
+            :disabled="importing"
+            class="input"
+          />
+          <p class="text-sm text-muted" style="margin-top:0.25rem">Use the SETUP_PASSWORD of the instance the backup was exported from. Leave blank if it was this instance.</p>
+        </div>
+        <div class="btn-pair">
+          <button @click="confirmImport()" :disabled="importing" class="btn btn-primary">
+            <span x-show="!importing">Import &amp; Restart</span>
+            <span x-show="importing" style="display:inline-flex;align-items:center;gap:0.5rem">
+              <span class="spinner spinner-inline" aria-hidden="true"></span>
+              Importing
+            </span>
+          </button>
+          <button @click="cancelImport()" :disabled="importing" class="btn btn-close-full" style="margin-top:0">Cancel</button>
+        </div>
       </div>
     </div>
 
