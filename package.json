@@ -6,17 +6,21 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "node src/server.js",
-    "start": "node src/server.js",
-    "lint": "node -c src/server.js",
-    "test": "node --test src/*.test.mjs"
-  },
-  "dependencies": {
-    "express": "^5.1.0",
-    "http-proxy": "^1.18.1",
-    "node-pty": "^1.0.0",
-    "ws": "^8.18.0"
-  },
+  "dev": "node src/server.js",
+  "start": "node src/server.js",
+  "lint": "node -c src/server.js",
+  "test": "node --test src/*.test.mjs",
+  "sync-milo": "node scripts/sync-milo-docs.js",
+  "postdeploy": "pnpm run sync-milo"
+},
+"dependencies": {
+  "express": "^5.1.0",
+  "http-proxy": "^1.18.1",
+  "node-pty": "^1.0.0",
+  "ws": "^8.18.0",
+  "node-fetch": "^2.7.0",
+  "form-data": "^4.0.0"
+},
   "pnpm": {
     "onlyBuiltDependencies": ["node-pty"]
   }
