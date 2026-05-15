@@ -5,46 +5,6 @@ import twilio from 'twilio';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
-// μ-law → 16-bit PCM
-function ulawToPcm(ulawBuffer) {
-  const pcm = new Int16Array(ulawBuffer.length);
-  for (let i = 0; i < ulawBuffer.length; i++) {
-    const mu = ulawBuffer[i] ^ 0xFF;
-    const sign = (mu & 0x80) ? -1 : 1;
-    const exponent = (mu & 0x70) >> 4;
-    const mantissa = mu & 0x0F;
-    pcm[i] = sign * (((mantissa << 4) + 0x08) << (exponent + 3));
-  }
-  return Buffer.from(pcm.buffer);
-}
-
-// 16-bit PCM → μ-law
-function pcmToUlaw(pcmBuffer) {
-  const pcm = new Int16Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 2);
-  const ulaw = Buffer.allocUnsafe(pcm.length);
-  const BIAS = 0x84;
-  const CLIP = 32635;
-  const EXP_LUT = [0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
-                   5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
-                   6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-                   6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
-                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
-                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7];
-  for (let i = 0; i < pcm.length; i++) {
-    let sample = pcm[i];
-    const sign = (sample >> 8) & 0x80;
-    if (sign !== 0) sample = -sample;
-    if (sample > CLIP) sample = CLIP;
-    sample += BIAS;
-    const exp = EXP_LUT[(sample >> 7) & 0xFF];
-    const mantissa = (sample >> (exp + 3)) & 0x0F;
-    ulaw[i] = ~(sign | (exp << 4) | mantissa) & 0xFF;
-  }
-  return ulaw;
-}
-
 export default function setupVoiceRoutes(wsInstance) {
   const router = express.Router();
   wsInstance.applyTo(router);
@@ -101,9 +61,10 @@ export default function setupVoiceRoutes(wsInstance) {
             }
           ],
           input_audio_transcription: { model: "grok-2-audio" },
+          // pcmu = G.711 μ-law 8kHz — exactly what Twilio Media Streams sends/expects, no conversion needed
           audio: {
-            input: { format: { type: "audio/pcm", rate: 8000 } },
-            output: { format: { type: "audio/pcm", rate: 8000 } }
+            input: { format: { type: "audio/pcmu", rate: 8000 } },
+            output: { format: { type: "audio/pcmu", rate: 8000 } }
           }
         }
       }));
@@ -122,13 +83,12 @@ export default function setupVoiceRoutes(wsInstance) {
       }
 
       if (event.type === 'response.output_audio.delta' && streamSid) {
-        const pcm = Buffer.from(event.delta, 'base64');
-        const ulaw = pcmToUlaw(pcm);
+        // xAI outputs pcmu base64 → pass directly to Twilio media event
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({
             event: 'media',
             streamSid,
-            media: { payload: ulaw.toString('base64') }
+            media: { payload: event.delta }
           }));
         }
       }
@@ -152,14 +112,13 @@ export default function setupVoiceRoutes(wsInstance) {
       }
 
       if (data.event === 'media') {
-        const ulaw = Buffer.from(data.media.payload, 'base64');
-        const pcm = ulawToPcm(ulaw);
-        const b64 = pcm.toString('base64');
+        // Twilio payload is already base64 pcmu — pass directly to xAI
+        const payload = data.media.payload;
         if (!xaiReady) {
-          audioBuffer.push(b64);
+          audioBuffer.push(payload);
           return;
         }
-        xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64 }));
+        xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: payload }));
       }
     });
 
