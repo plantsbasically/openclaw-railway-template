@@ -16,12 +16,16 @@ import {
   describeGatewayHealth,
 } from "./gateway-readiness.js";
 
-import setupVoiceRoutes from './routes/voice.js';
+import { setupVoiceHttpRoutes, handleVoiceStream } from './routes/voice.js';
 
 const app = express();
 const wsInstance = expressWs(app);
 
-app.use('/voice', setupVoiceRoutes(wsInstance));
+// Voice HTTP routes (incoming webhook + status callback) — no WS needed here
+app.use('/voice', setupVoiceHttpRoutes());
+
+// Dedicated WS server for Twilio Media Streams — bypasses express-ws entirely
+const voiceWss = new WebSocketServer({ noServer: true });
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
@@ -2064,8 +2068,11 @@ const tuiWss = createTuiWebSocketServer(server);
 server.on("upgrade", async (req, socket, head) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // Let express-ws handle voice WebSocket upgrades — do not proxy to gateway
-  if (url.pathname.startsWith("/voice/")) {
+  // Handle Twilio Media Streams WebSocket directly — never proxy to gateway
+  if (url.pathname === "/voice/stream") {
+    voiceWss.handleUpgrade(req, socket, head, (ws) => {
+      handleVoiceStream(ws, req);
+    });
     return;
   }
 

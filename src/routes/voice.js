@@ -34,12 +34,12 @@ const SESSION_CONFIG = {
     {
       type: 'function', name: 'pause_subscription',
       description: 'Pause a subscription temporarily.',
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month' or 'March 15th'" } }, required: ['subscription_id', 'customer_email'] }
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month'" } }, required: ['subscription_id', 'customer_email'] }
     },
     {
       type: 'function', name: 'reschedule_delivery',
       description: 'Change the next delivery date for a subscription.',
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format, e.g., 'two weeks from now'" } }, required: ['subscription_id', 'customer_email', 'new_delivery_date'] }
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format" } }, required: ['subscription_id', 'customer_email', 'new_delivery_date'] }
     },
     {
       type: 'function', name: 'cancel_subscription',
@@ -57,131 +57,126 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number or subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['order_number', 'customer_email'] }
     }
   ],
-  // G.711 μ-law — Twilio's native telephony format, no conversion needed
   audio: {
     input: { format: { type: 'audio/pcmu' } },
     output: { format: { type: 'audio/pcmu' } }
   }
 };
 
-export default function setupVoiceRoutes(wsInstance) {
+// HTTP routes: /incoming webhook + /status callback
+export function setupVoiceHttpRoutes() {
   const router = express.Router();
-  wsInstance.applyTo(router);
 
-  // 1. Incoming call webhook - returns TwiML
   router.post('/incoming', (req, res) => {
     const host = req.headers.host;
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="wss://${host}/voice/stream" statusCallback="https://${host}/voice/status" />
   </Connect>
-</Response>`;
-    res.type('text/xml').send(twiml);
+</Response>`);
   });
 
-  // 2. Media Stream WebSocket (Twilio ↔ xAI)
-  router.ws('/stream', (ws, req) => {
-    console.log('[voice] call connected');
-
-    let streamSid = null;
-    let sessionReady = false;
-
-    const xaiWs = new WebSocket('wss://api.x.ai/v1/realtime?model=grok-voice-latest', {
-      headers: { Authorization: `Bearer ${XAI_API_KEY}` },
-    });
-
-    // ── xAI → Twilio ──────────────────────────────────────────────────────────
-
-    xaiWs.on('open', () => {
-      console.log('[voice] xAI connected — sending session.update');
-      // Guide says: send session.update as the first message after open
-      xaiWs.send(JSON.stringify({ type: 'session.update', session: SESSION_CONFIG }));
-    });
-
-    xaiWs.on('message', (data) => {
-      let event;
-      try { event = JSON.parse(data); } catch { return; }
-
-      if (event.type !== 'response.output_audio.delta') {
-        console.log('[voice] xAI ←', event.type, event.error ? JSON.stringify(event.error) : '');
-      }
-
-      switch (event.type) {
-        case 'session.updated':
-          sessionReady = true;
-          console.log('[voice] session ready — prompting Milo to greet');
-          xaiWs.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Greet the caller and introduce yourself.' }] }
-          }));
-          xaiWs.send(JSON.stringify({ type: 'response.create' }));
-          break;
-
-        case 'response.output_audio.delta':
-          if (streamSid && ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload: event.delta } }));
-          }
-          break;
-
-        case 'input_audio_buffer.speech_started':
-          // Barge-in: clear Twilio buffer AND cancel xAI response
-          if (streamSid && ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ event: 'clear', streamSid }));
-          }
-          xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
-          break;
-
-        case 'response.function_call_arguments.done':
-          console.log('[voice] tool called:', event.name, event.arguments);
-          // TODO: implement tool handlers — stub returns empty result for now
-          xaiWs.send(JSON.stringify({
-            type: 'conversation.item.create',
-            item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify({ error: 'Tool not yet implemented' }) }
-          }));
-          xaiWs.send(JSON.stringify({ type: 'response.create' }));
-          break;
-
-        case 'error':
-          console.error('[voice] xAI error:', JSON.stringify(event));
-          break;
-      }
-    });
-
-    xaiWs.on('error', (err) => console.error('[voice] xAI WS error:', err.message));
-    xaiWs.on('close', (code, reason) => {
-      console.log('[voice] xAI WS closed — code:', code, 'reason:', reason?.toString());
-      if (ws.readyState === ws.OPEN) ws.close();
-    });
-
-    // ── Twilio → xAI ──────────────────────────────────────────────────────────
-
-    ws.on('message', (message) => {
-      let data;
-      try { data = JSON.parse(message); } catch { return; }
-
-      if (data.event === 'start') {
-        streamSid = data.start.streamSid;
-        console.log('[voice] Twilio stream started, sid:', streamSid);
-      }
-
-      if (data.event === 'media' && data.media?.track === 'inbound') {
-        if (!sessionReady || xaiWs.readyState !== WebSocket.OPEN) return;
-        xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: data.media.payload }));
-      }
-    });
-
-    ws.on('close', () => {
-      console.log('[voice] Twilio WS closed');
-      xaiWs.close();
-    });
-  });
-
-  // 3. Call status webhook
   router.post('/status', (req, res) => {
     console.log('[voice] call ended', req.body?.CallStatus);
     res.sendStatus(200);
   });
 
   return router;
+}
+
+// WebSocket handler: called directly from server.js upgrade handler
+export function handleVoiceStream(ws, req) {
+  console.log('[voice] call connected');
+
+  let streamSid = null;
+  let sessionReady = false;
+
+  const xaiWs = new WebSocket('wss://api.x.ai/v1/realtime?model=grok-voice-latest', {
+    headers: { Authorization: `Bearer ${XAI_API_KEY}` },
+  });
+
+  // ── xAI → Twilio ────────────────────────────────────────────────────────────
+
+  xaiWs.on('open', () => {
+    console.log('[voice] xAI connected — sending session.update');
+    xaiWs.send(JSON.stringify({ type: 'session.update', session: SESSION_CONFIG }));
+  });
+
+  xaiWs.on('message', (data) => {
+    let event;
+    try { event = JSON.parse(data); } catch { return; }
+
+    if (event.type !== 'response.output_audio.delta') {
+      console.log('[voice] xAI ←', event.type, event.error ? JSON.stringify(event.error) : '');
+    }
+
+    switch (event.type) {
+      case 'session.updated':
+        sessionReady = true;
+        console.log('[voice] session ready — prompting Milo to greet');
+        xaiWs.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Greet the caller and introduce yourself.' }] }
+        }));
+        xaiWs.send(JSON.stringify({ type: 'response.create' }));
+        break;
+
+      case 'response.output_audio.delta':
+        if (streamSid && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload: event.delta } }));
+        }
+        break;
+
+      case 'input_audio_buffer.speech_started':
+        if (streamSid && ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ event: 'clear', streamSid }));
+        }
+        xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        break;
+
+      case 'response.function_call_arguments.done':
+        console.log('[voice] tool called:', event.name, event.arguments);
+        xaiWs.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify({ error: 'Tool not yet implemented' }) }
+        }));
+        xaiWs.send(JSON.stringify({ type: 'response.create' }));
+        break;
+
+      case 'error':
+        console.error('[voice] xAI error:', JSON.stringify(event));
+        break;
+    }
+  });
+
+  xaiWs.on('error', (err) => console.error('[voice] xAI WS error:', err.message));
+  xaiWs.on('close', (code, reason) => {
+    console.log('[voice] xAI WS closed — code:', code, 'reason:', reason?.toString());
+    if (ws.readyState === ws.OPEN) ws.close();
+  });
+
+  // ── Twilio → xAI ────────────────────────────────────────────────────────────
+
+  ws.on('message', (message) => {
+    let data;
+    try { data = JSON.parse(message); } catch { return; }
+
+    if (data.event === 'start') {
+      streamSid = data.start.streamSid;
+      console.log('[voice] Twilio stream started, sid:', streamSid);
+    }
+
+    if (data.event === 'media' && data.media?.track === 'inbound') {
+      if (!sessionReady || xaiWs.readyState !== WebSocket.OPEN) return;
+      xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: data.media.payload }));
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('[voice] Twilio WS closed');
+    xaiWs.close();
+  });
+
+  ws.on('error', (err) => console.error('[voice] Twilio WS error:', err.message));
 }
