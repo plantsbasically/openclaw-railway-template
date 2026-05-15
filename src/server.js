@@ -16,6 +16,13 @@ import {
   describeGatewayHealth,
 } from "./gateway-readiness.js";
 
+import voiceRoutes from './routes/voice.js';   // ← moved here (top of file)
+
+const app = express();
+expressWs(app);
+
+app.use('/voice', voiceRoutes);
+
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
   process.env.OPENCLAW_STATE_DIR?.trim() ||
@@ -534,10 +541,6 @@ function requireSetupAuth(req, res, next) {
   return next();
 }
 
-const app = express();
-expressWs(app);
-import voiceRoutes from './routes/voice.js';
-app.use('/voice', voiceRoutes);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
