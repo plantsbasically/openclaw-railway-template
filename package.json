@@ -10,8 +10,7 @@
   "start": "node src/server.js",
   "lint": "node -c src/server.js",
   "test": "node --test src/*.test.mjs",
-  "sync-milo": "node scripts/sync-milo-docs.js",
-  "postdeploy": "pnpm run sync-milo"
+  "sync-milo": "node scripts/sync-milo-docs.js"
 },
 "dependencies": {
   "express": "^5.1.0",
