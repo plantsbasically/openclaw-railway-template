@@ -20,7 +20,8 @@
   "ws": "^8.18.0",
   "node-fetch": "^2.7.0",
   "form-data": "^4.0.0",
-  "twilio": "^5.3.2"
+  "twilio": "^5.3.2",
+  "express-ws": "^5.0.2"
 },
   "pnpm": {
     "onlyBuiltDependencies": ["node-pty"]
