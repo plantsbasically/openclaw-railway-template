@@ -1,3 +1,5 @@
+import voiceRoutes from './routes/voice.js';
+app.use('/voice', voiceRoutes);
 import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
