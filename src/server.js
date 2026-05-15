@@ -9,6 +9,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import express from "express";
+import expressWs from "express-ws";
 import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
@@ -116,7 +117,7 @@ const INTERNAL_GATEWAY_PORT = Number.parseInt(
   10,
 );
 // This is the wrapper's upstream target host, not an OpenClaw --bind mode.
-// Railway exposes the Express wrapper on PORT; the gateway stays private.
+// Railway exposes the  wrapper on PORT; the gateway stays private.
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
 const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`;
 
@@ -536,6 +537,7 @@ function requireSetupAuth(req, res, next) {
 }
 
 const app = express();
+expressWs(app);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
