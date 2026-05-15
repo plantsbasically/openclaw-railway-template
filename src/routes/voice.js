@@ -5,6 +5,7 @@ import twilio from 'twilio';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
+// μ-law → 16-bit PCM
 function ulawToPcm(ulawBuffer) {
   const pcm = new Int16Array(ulawBuffer.length);
   for (let i = 0; i < ulawBuffer.length; i++) {
@@ -17,8 +18,31 @@ function ulawToPcm(ulawBuffer) {
   return Buffer.from(pcm.buffer);
 }
 
+// 16-bit PCM → μ-law
 function pcmToUlaw(pcmBuffer) {
-  return pcmBuffer;
+  const pcm = new Int16Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 2);
+  const ulaw = Buffer.allocUnsafe(pcm.length);
+  const BIAS = 0x84;
+  const CLIP = 32635;
+  const EXP_LUT = [0,0,1,1,2,2,2,2,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,
+                   5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,
+                   6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+                   6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,
+                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+                   7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7];
+  for (let i = 0; i < pcm.length; i++) {
+    let sample = pcm[i];
+    const sign = (sample >> 8) & 0x80;
+    if (sign !== 0) sample = -sample;
+    if (sample > CLIP) sample = CLIP;
+    sample += BIAS;
+    const exp = EXP_LUT[(sample >> 7) & 0xFF];
+    const mantissa = (sample >> (exp + 3)) & 0x0F;
+    ulaw[i] = ~(sign | (exp << 4) | mantissa) & 0xFF;
+  }
+  return ulaw;
 }
 
 export default function setupVoiceRoutes(wsInstance) {
@@ -40,16 +64,22 @@ export default function setupVoiceRoutes(wsInstance) {
 
   // 2. Media Stream WebSocket (Twilio ↔ xAI)
   router.ws('/stream', (ws, req) => {
-    console.log('📞 New phone call connected - starting Milo');
+    console.log('📞 New call connected');
+
+    let streamSid = null;
+    let xaiReady = false;
+    let audioBuffer = [];
 
     const xaiWs = new WebSocket('wss://api.x.ai/v1/realtime?model=grok-voice-latest', {
       headers: { Authorization: `Bearer ${XAI_API_KEY}` },
     });
 
-    let xaiReady = false;
-    let audioBuffer = [];
+    xaiWs.on('error', (err) => {
+      console.error('xAI WebSocket error:', err.message);
+    });
 
     xaiWs.on('open', () => {
+      console.log('xAI connected');
       xaiWs.send(JSON.stringify({
         type: "session.update",
         session: {
@@ -63,60 +93,85 @@ export default function setupVoiceRoutes(wsInstance) {
               description: "Verify and retrieve customer account details for identity confirmation.",
               parameters: { type: "object", properties: { email: { type: "string" }, phone: { type: "string" } }, required: ["email"] }
             },
-            // ... add all your other tools (get_order_status, get_subscription_details, etc.)
-
+            // ... add your other tools here
             {
-              "type": "file_search",
-              "vector_store_ids": ["collection_7fbf149b-f6ea-4034-9bad-61628b626659"],
-              "max_num_results": 10
+              type: "file_search",
+              vector_store_ids: ["collection_7fbf149b-f6ea-4034-9bad-61628b626659"],
+              max_num_results: 10
             }
           ],
           input_audio_transcription: { model: "grok-2-audio" },
           audio: {
-            input: { format: { type: "audio/pcm", rate: 24000 } },
-            output: { format: { type: "audio/pcm", rate: 24000 } }
+            input: { format: { type: "audio/pcm", rate: 8000 } },
+            output: { format: { type: "audio/pcm", rate: 8000 } }
           }
         }
       }));
     });
 
     xaiWs.on('message', (data) => {
-      const event = JSON.parse(data);
+      let event;
+      try { event = JSON.parse(data); } catch { return; }
 
       if (event.type === 'session.updated') {
         xaiReady = true;
-        audioBuffer.forEach(chunk => ws.send(chunk));
+        audioBuffer.forEach(chunk => {
+          xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: chunk }));
+        });
         audioBuffer = [];
       }
 
-      if (event.type === 'response.output_audio.delta') {
-        const audio = pcmToUlaw(Buffer.from(event.delta, 'base64'));
-        ws.send(audio);
+      if (event.type === 'response.output_audio.delta' && streamSid) {
+        const pcm = Buffer.from(event.delta, 'base64');
+        const ulaw = pcmToUlaw(pcm);
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({
+            event: 'media',
+            streamSid,
+            media: { payload: ulaw.toString('base64') }
+          }));
+        }
       }
 
       if (event.type === 'response.function_call_arguments.done') {
-        console.log(`Tool called: ${event.name}`);
-        // TODO: implement tool handlers (lookup_account, etc.)
-        // const result = await yourToolHandler(event.name, JSON.parse(event.arguments));
+        console.log('Tool called:', event.name);
+        // TODO: implement tool handlers
         // xaiWs.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify(result) } }));
         // xaiWs.send(JSON.stringify({ type: 'response.create' }));
       }
     });
 
+    // Twilio sends JSON events — parse them, don't treat as raw bytes
     ws.on('message', (message) => {
-      if (!xaiReady) {
-        audioBuffer.push(message);
-        return;
+      let data;
+      try { data = JSON.parse(message); } catch { return; }
+
+      if (data.event === 'start') {
+        streamSid = data.start.streamSid;
+        console.log('Twilio stream started, sid:', streamSid);
       }
-      const pcm = ulawToPcm(message);
-      xaiWs.send(JSON.stringify({
-        type: 'input_audio_buffer.append',
-        audio: pcm.toString('base64')
-      }));
+
+      if (data.event === 'media') {
+        const ulaw = Buffer.from(data.media.payload, 'base64');
+        const pcm = ulawToPcm(ulaw);
+        const b64 = pcm.toString('base64');
+        if (!xaiReady) {
+          audioBuffer.push(b64);
+          return;
+        }
+        xaiWs.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64 }));
+      }
     });
 
-    ws.on('close', () => xaiWs.close());
-    xaiWs.on('close', () => ws.close());
+    ws.on('close', () => {
+      console.log('Twilio WS closed');
+      xaiWs.close();
+    });
+
+    xaiWs.on('close', () => {
+      console.log('xAI WS closed');
+      if (ws.readyState === ws.OPEN) ws.close();
+    });
   });
 
   // 3. Call status webhook
