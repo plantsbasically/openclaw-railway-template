@@ -2064,6 +2064,11 @@ const tuiWss = createTuiWebSocketServer(server);
 server.on("upgrade", async (req, socket, head) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
+  // Let express-ws handle voice WebSocket upgrades — do not proxy to gateway
+  if (url.pathname.startsWith("/voice/")) {
+    return;
+  }
+
   if (url.pathname === "/tui/ws") {
     if (!ENABLE_WEB_TUI) {
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
