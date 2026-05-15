@@ -12,6 +12,11 @@ const SESSION_CONFIG = {
   input_audio_transcription: { model: 'grok-2-audio' },
   tools: [
     {
+      type: 'file_search',
+      vector_store_ids: ['collection_7fbf149b-f6ea-4034-9bad-61628b626659'],
+      max_num_results: 10
+    },
+    {
       type: 'function', name: 'lookup_account',
       description: 'Verify and retrieve customer account details for identity confirmation.',
       parameters: { type: 'object', properties: { email: { type: 'string', description: "Customer's email address" }, phone: { type: 'string', description: "Customer's phone number (optional for verification)" } }, required: ['email'] }
