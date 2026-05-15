@@ -1,5 +1,3 @@
-import voiceRoutes from './routes/voice.js';
-app.use('/voice', voiceRoutes);
 import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -538,6 +536,8 @@ function requireSetupAuth(req, res, next) {
 
 const app = express();
 expressWs(app);
+import voiceRoutes from './routes/voice.js';
+app.use('/voice', voiceRoutes);
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
