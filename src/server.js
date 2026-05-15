@@ -16,12 +16,12 @@ import {
   describeGatewayHealth,
 } from "./gateway-readiness.js";
 
-import voiceRoutes from './routes/voice.js';   // ← moved here (top of file)
+import setupVoiceRoutes from './routes/voice.js';
 
 const app = express();
-expressWs(app);
+const wsInstance = expressWs(app);
 
-app.use('/voice', voiceRoutes);
+app.use('/voice', setupVoiceRoutes(wsInstance));
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const STATE_DIR =
