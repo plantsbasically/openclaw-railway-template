@@ -5,11 +5,65 @@ import twilio from 'twilio';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
+const SESSION_CONFIG = {
+  voice: 'rex',
+  instructions: "You are Milo, customer support for Plants Basically. We sell Juicy Joint Protocol, a daily liquid supplement for joint pain relief. Speak warm, casual, direct. Sound like a real person helping a friend. Not a corporate bot. Short sentences. Natural pauses. Warm, calm, practical. You care, but direct.\n\nGoals: Resolve issues fast. Positive vibe. Look up orders. Track shipments. Status updates. Returns, exchanges, refunds per policy. Troubleshoot products step-by-step. FAQs on products, services, policies. Escalate complex stuff.\n\nBe patient. Empathetic with frustrated folks. Solutions first. Confirm fixed before end. Clear follow-up expectations if needed. Verify identity before account details. Offer options. Thank for patience, business.\n\nProduct facts: Dose 1-2 full droppers daily. Shelf life 5 years. Ingredients clinically researched, tested. plantsbasically.com. Subs with free shipping.\n\nRules: No diagnosing. No medical advice. No 'stop meds'. No 'heal', 'cure', 'treat'. Medical questions? Point to plantsbasically.com/pages/reviews. On meds, blood thinners, surgery? Consult doctor. No overpromising.\n\nHandle: Helpful. Lead with fix. Sub cancel? Ask why. Offer pause, delay, change schedule first. Shipping issue? Offer order lookup. Concise: 3-4 sentences max.\n\nAvoid: Em dashes. 'Unfortunately'. Scripted sound. Made-up info - say 'I'll look into it, follow up'.\n\nDates/times: Natural only. Take 'next Tuesday', 'tomorrow 3pm'. Confirm natural: 'Tuesday, December 15th at 3 PM'. No format lectures.\n\nUse tools for real actions. Never fake. Verify customer first with lookup_account. Then order/sub actions.",
+  turn_detection: { type: 'server_vad' },
+  input_audio_transcription: { model: 'grok-2-audio' },
+  tools: [
+    {
+      type: 'function', name: 'lookup_account',
+      description: 'Verify and retrieve customer account details for identity confirmation.',
+      parameters: { type: 'object', properties: { email: { type: 'string', description: "Customer's email address" }, phone: { type: 'string', description: "Customer's phone number (optional for verification)" } }, required: ['email'] }
+    },
+    {
+      type: 'function', name: 'get_order_status',
+      description: 'Get order details, status, shipment tracking, and delivery info.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'The order number' }, customer_email: { type: 'string', description: "Customer's email for verification" } }, required: ['order_number', 'customer_email'] }
+    },
+    {
+      type: 'function', name: 'get_subscription_details',
+      description: 'Retrieve subscription details, next billing/delivery dates, and status.',
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID (optional, can lookup by email)' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['customer_email'] }
+    },
+    {
+      type: 'function', name: 'pause_subscription',
+      description: 'Pause a subscription temporarily.',
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month' or 'March 15th'" } }, required: ['subscription_id', 'customer_email'] }
+    },
+    {
+      type: 'function', name: 'reschedule_delivery',
+      description: 'Change the next delivery date for a subscription.',
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format, e.g., 'two weeks from now'" } }, required: ['subscription_id', 'customer_email', 'new_delivery_date'] }
+    },
+    {
+      type: 'function', name: 'cancel_subscription',
+      description: "Cancel a customer's subscription.",
+      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['subscription_id', 'customer_email'] }
+    },
+    {
+      type: 'function', name: 'initiate_return',
+      description: 'Start the return or exchange process for an order.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer's email" }, reason: { type: 'string', description: 'Brief reason for return/exchange' } }, required: ['order_number', 'customer_email', 'reason'] }
+    },
+    {
+      type: 'function', name: 'process_refund',
+      description: 'Issue a refund for an eligible order or subscription.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number or subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['order_number', 'customer_email'] }
+    }
+  ],
+  // G.711 μ-law — Twilio's native telephony format, no conversion needed
+  audio: {
+    input: { format: { type: 'audio/pcmu' } },
+    output: { format: { type: 'audio/pcmu' } }
+  }
+};
+
 export default function setupVoiceRoutes(wsInstance) {
   const router = express.Router();
   wsInstance.applyTo(router);
 
-  // 1. Incoming call webhook - returns TwiML (no <Say>, Milo greets via xAI)
+  // 1. Incoming call webhook - returns TwiML
   router.post('/incoming', (req, res) => {
     const host = req.headers.host;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -35,7 +89,9 @@ export default function setupVoiceRoutes(wsInstance) {
     // ── xAI → Twilio ──────────────────────────────────────────────────────────
 
     xaiWs.on('open', () => {
-      console.log('[voice] xAI connected');
+      console.log('[voice] xAI connected — sending session.update');
+      // Guide says: send session.update as the first message after open
+      xaiWs.send(JSON.stringify({ type: 'session.update', session: SESSION_CONFIG }));
     });
 
     xaiWs.on('message', (data) => {
@@ -43,90 +99,53 @@ export default function setupVoiceRoutes(wsInstance) {
       try { event = JSON.parse(data); } catch { return; }
 
       if (event.type !== 'response.output_audio.delta') {
-        console.log('[voice] xAI event:', event.type);
+        console.log('[voice] xAI ←', event.type, event.error ? JSON.stringify(event.error) : '');
       }
 
       switch (event.type) {
-        case 'conversation.created':
-          // Send session config once xAI confirms conversation is ready
-          xaiWs.send(JSON.stringify({
-            type: 'session.update',
-            session: {
-              voice: 'rex',
-              instructions: "You are Milo, customer support for Plants Basically. We sell Juicy Joint Protocol, a daily liquid supplement for joint pain relief. Speak warm, casual, direct. Sound like a real person helping a friend. Not a corporate bot. Short sentences. Natural pauses. Warm, calm, practical. You care, but direct.\n\nGoals: Resolve issues fast. Positive vibe. Look up orders. Track shipments. Status updates. Returns, exchanges, refunds per policy. Troubleshoot products step-by-step. FAQs on products, services, policies. Escalate complex stuff.\n\nBe patient. Empathetic with frustrated folks. Solutions first. Confirm fixed before end. Clear follow-up expectations if needed. Verify identity before account details. Offer options. Thank for patience, business.\n\nProduct facts: Dose 1-2 full droppers daily. Shelf life 5 years. Ingredients clinically researched, tested. plantsbasically.com. Subs with free shipping.\n\nRules: No diagnosing. No medical advice. No 'stop meds'. No 'heal', 'cure', 'treat'. Medical questions? Point to plantsbasically.com/pages/reviews. On meds, blood thinners, surgery? Consult doctor. No overpromising.\n\nHandle: Helpful. Lead with fix. Sub cancel? Ask why. Offer pause, delay, change schedule first. Shipping issue? Offer order lookup. Concise: 3-4 sentences max.\n\nAvoid: Em dashes. 'Unfortunately'. Scripted sound. Made-up info - say 'I'll look into it, follow up'.\n\nDates/times: Natural only. Take 'next Tuesday', 'tomorrow 3pm'. Confirm natural: 'Tuesday, December 15th at 3 PM'. No format lectures.\n\nUse tools for real actions. Never fake. Verify customer first with lookup_account. Then order/sub actions.",
-              turn_detection: { type: 'server_vad' },
-              tools: [
-                {
-                  type: 'function',
-                  name: 'lookup_account',
-                  description: 'Verify and retrieve customer account details for identity confirmation.',
-                  parameters: { type: 'object', properties: { email: { type: 'string' }, phone: { type: 'string' } }, required: ['email'] }
-                },
-                // ... add your other tools here
-                {
-                  type: 'file_search',
-                  vector_store_ids: ['collection_7fbf149b-f6ea-4034-9bad-61628b626659'],
-                  max_num_results: 10
-                }
-              ],
-              // pcmu = G.711 μ-law — no rate field, it's always 8kHz
-              audio: {
-                input: { format: { type: 'audio/pcmu' } },
-                output: { format: { type: 'audio/pcmu' } }
-              }
-            }
-          }));
-          break;
-
         case 'session.updated':
           sessionReady = true;
-          // Prompt Milo to greet the caller
+          console.log('[voice] session ready — prompting Milo to greet');
           xaiWs.send(JSON.stringify({
             type: 'conversation.item.create',
-            item: {
-              type: 'message',
-              role: 'user',
-              content: [{ type: 'input_text', text: 'Greet the caller and introduce yourself.' }]
-            }
+            item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Greet the caller and introduce yourself.' }] }
           }));
           xaiWs.send(JSON.stringify({ type: 'response.create' }));
           break;
 
         case 'response.output_audio.delta':
-          // Stream audio directly to Twilio (pcmu passthrough)
           if (streamSid && ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({
-              event: 'media',
-              streamSid,
-              media: { payload: event.delta }
-            }));
+            ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload: event.delta } }));
           }
           break;
 
         case 'input_audio_buffer.speech_started':
-          // User started talking — clear Twilio's playback buffer (barge-in)
+          // Barge-in: clear Twilio buffer AND cancel xAI response
           if (streamSid && ws.readyState === ws.OPEN) {
             ws.send(JSON.stringify({ event: 'clear', streamSid }));
           }
+          xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
           break;
 
         case 'response.function_call_arguments.done':
-          console.log('[voice] tool called:', event.name);
-          // TODO: implement tool handlers
-          // const result = await yourHandler(event.name, JSON.parse(event.arguments));
-          // xaiWs.send(JSON.stringify({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify(result) } }));
-          // xaiWs.send(JSON.stringify({ type: 'response.create' }));
+          console.log('[voice] tool called:', event.name, event.arguments);
+          // TODO: implement tool handlers — stub returns empty result for now
+          xaiWs.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify({ error: 'Tool not yet implemented' }) }
+          }));
+          xaiWs.send(JSON.stringify({ type: 'response.create' }));
           break;
 
         case 'error':
-          console.error('[voice] xAI error:', event.error?.message || JSON.stringify(event));
+          console.error('[voice] xAI error:', JSON.stringify(event));
           break;
       }
     });
 
     xaiWs.on('error', (err) => console.error('[voice] xAI WS error:', err.message));
-    xaiWs.on('close', (code) => {
-      console.log('[voice] xAI WS closed, code:', code);
+    xaiWs.on('close', (code, reason) => {
+      console.log('[voice] xAI WS closed — code:', code, 'reason:', reason?.toString());
       if (ws.readyState === ws.OPEN) ws.close();
     });
 
