@@ -7,7 +7,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import express from "express";
-import expressWs from "express-ws";
 import httpProxy from "http-proxy";
 import pty from "node-pty";
 import { WebSocketServer } from "ws";
@@ -19,12 +18,11 @@ import {
 import { setupVoiceHttpRoutes, handleVoiceStream } from './routes/voice.js';
 
 const app = express();
-const wsInstance = expressWs(app);
 
-// Voice HTTP routes (incoming webhook + status callback) — no WS needed here
+// Voice HTTP routes (incoming webhook + status callback)
 app.use('/voice', setupVoiceHttpRoutes());
 
-// Dedicated WS server for Twilio Media Streams — bypasses express-ws entirely
+// Dedicated WS server for Twilio Media Streams — handled directly in upgrade event
 const voiceWss = new WebSocketServer({ noServer: true });
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
