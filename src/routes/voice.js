@@ -34,18 +34,18 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'pause_subscription',
-      description: 'Pause a subscription temporarily.',
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month'" } }, required: ['subscription_id', 'customer_email'] }
+      description: 'Pause a subscription. Only needs customer email — never ask the customer for a subscription ID.',
+      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month'" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email'] }
     },
     {
       type: 'function', name: 'reschedule_delivery',
-      description: 'Change the next delivery date for a subscription.',
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format" } }, required: ['subscription_id', 'customer_email', 'new_delivery_date'] }
+      description: 'Change the next delivery date. Only needs customer email and new date — never ask the customer for a subscription ID.',
+      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email', 'new_delivery_date'] }
     },
     {
       type: 'function', name: 'cancel_subscription',
-      description: "Cancel a customer's subscription.",
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['subscription_id', 'customer_email'] }
+      description: "Cancel a customer's subscription. Only needs customer email — never ask the customer for a subscription ID.",
+      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email'] }
     },
     {
       type: 'function', name: 'initiate_return',

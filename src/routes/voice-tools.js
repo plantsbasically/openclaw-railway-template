@@ -102,12 +102,21 @@ export async function get_order_status({ order_number, customer_email }) {
   }
 }
 
+// Fetch active subscription ID by email — used internally so Milo never asks the customer for it
+async function resolveSubscriptionId(subscription_id, customer_email) {
+  if (subscription_id) return subscription_id;
+  const data = await loop(`/api/v2/subscriptions?email=${encodeURIComponent(customer_email)}`);
+  const subs = (data.subscriptions || data.data || []).filter(s => s.status === 'active' || s.status === 'ACTIVE');
+  if (!subs.length) throw new Error(`No active subscription found for ${customer_email}`);
+  return subs[0].id;
+}
+
 export async function get_subscription_details({ customer_email }) {
   try {
     const data = await loop(`/api/v2/subscriptions?email=${encodeURIComponent(customer_email)}`);
     const subs = data.subscriptions || data.data || [];
     if (!subs.length) {
-      return { found: false, message: `No active subscriptions found for ${customer_email}` };
+      return { found: false, message: `No subscriptions found for ${customer_email}` };
     }
     return {
       found: true,
@@ -128,11 +137,12 @@ export async function get_subscription_details({ customer_email }) {
 
 export async function pause_subscription({ subscription_id, customer_email, pause_until }) {
   try {
-    const data = await loop(`/api/v2/subscriptions/${subscription_id}/pause`, {
+    const id = await resolveSubscriptionId(subscription_id, customer_email);
+    const data = await loop(`/api/v2/subscriptions/${id}/pause`, {
       method: 'POST',
       body: JSON.stringify({ resume_date: pause_until }),
     });
-    return { success: true, message: `Subscription paused${pause_until ? ` until ${pause_until}` : ''}`, data };
+    return { success: true, message: `Subscription paused${pause_until ? ` until ${pause_until}` : ''}` };
   } catch (err) {
     console.error('[tool] pause_subscription error:', err.message);
     return { error: err.message };
@@ -141,11 +151,12 @@ export async function pause_subscription({ subscription_id, customer_email, paus
 
 export async function reschedule_delivery({ subscription_id, customer_email, new_delivery_date }) {
   try {
-    const data = await loop(`/api/v2/subscriptions/${subscription_id}`, {
+    const id = await resolveSubscriptionId(subscription_id, customer_email);
+    const data = await loop(`/api/v2/subscriptions/${id}`, {
       method: 'PUT',
       body: JSON.stringify({ next_charge_scheduled_at: new_delivery_date }),
     });
-    return { success: true, message: `Next delivery rescheduled to ${new_delivery_date}`, data };
+    return { success: true, message: `Next delivery rescheduled to ${new_delivery_date}` };
   } catch (err) {
     console.error('[tool] reschedule_delivery error:', err.message);
     return { error: err.message };
@@ -154,8 +165,9 @@ export async function reschedule_delivery({ subscription_id, customer_email, new
 
 export async function cancel_subscription({ subscription_id, customer_email }) {
   try {
-    const data = await loop(`/api/v2/subscriptions/${subscription_id}/cancel`, { method: 'POST' });
-    return { success: true, message: 'Subscription cancelled', data };
+    const id = await resolveSubscriptionId(subscription_id, customer_email);
+    const data = await loop(`/api/v2/subscriptions/${id}/cancel`, { method: 'POST' });
+    return { success: true, message: 'Subscription cancelled' };
   } catch (err) {
     console.error('[tool] cancel_subscription error:', err.message);
     return { error: err.message };
