@@ -13,7 +13,7 @@ RUN apt-get update \
     unzip \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@2026.5.7
+RUN npm install -g openclaw@2026.5.12
 RUN npm install -g clawhub@latest
 
 WORKDIR /app
