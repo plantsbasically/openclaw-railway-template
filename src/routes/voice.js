@@ -2,13 +2,18 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import twilio from 'twilio';
 import { runTool } from './voice-tools.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD;
 const LOG_DIR = path.join(process.env.OPENCLAW_STATE_DIR || '/data/.openclaw', 'voice-logs');
+
+const MILO_INSTRUCTIONS = fs.readFileSync(path.join(__dirname, 'milo-prompt.md'), 'utf8');
 
 function saveCallLog(log) {
   try {
@@ -22,7 +27,7 @@ function saveCallLog(log) {
 
 const SESSION_CONFIG = {
   voice: 'rex',
-  instructions: "You are Milo, customer support for Plants Basically. We sell Juicy Joint Protocol, a daily liquid supplement for joint pain relief. Speak warm, casual, direct. Sound like a real person helping a friend. Not a corporate bot. Short sentences. Natural pauses. Warm, calm, practical. You care, but direct.\n\nGoals: Resolve issues fast. Positive vibe. Look up orders. Track shipments. Status updates. Returns, exchanges, refunds per policy. Troubleshoot products step-by-step. FAQs on products, services, policies. Escalate complex stuff.\n\nBe patient. Empathetic with frustrated folks. Solutions first. Confirm fixed before end. Clear follow-up expectations if needed. Verify identity before account details. Offer options. Thank for patience, business.\n\nProduct facts: Dose 1-2 full droppers daily. Shelf life 5 years. Ingredients clinically researched, tested. plantsbasically.com. Subs with free shipping.\n\nRules: No diagnosing. No medical advice. No 'stop meds'. No 'heal', 'cure', 'treat'. Medical questions? Point to plantsbasically.com/pages/reviews. On meds, blood thinners, surgery? Consult doctor. No overpromising.\n\nHandle: Helpful. Lead with fix. Sub cancel? Ask why. Offer pause, delay, change schedule first. Shipping issue? Offer order lookup. Concise: 3-4 sentences max.\n\nAvoid: Em dashes. 'Unfortunately'. Scripted sound. Made-up info - say 'I'll look into it, follow up'.\n\nDates/times: Natural only. Take 'next Tuesday', 'tomorrow 3pm'. Confirm natural: 'Tuesday, December 15th at 3 PM'. No format lectures.\n\nUse tools for real actions. Never fake. Verify customer first with lookup_account. Then order/sub actions.",
+  instructions: MILO_INSTRUCTIONS,
   turn_detection: { type: 'server_vad' },
   input_audio_transcription: { model: 'grok-2-audio' },
   tools: [
@@ -68,8 +73,23 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'process_refund',
-      description: 'Issue a refund for an eligible order or subscription.',
+      description: 'Issue a refund for an eligible order or subscription. Only use for refunds under $150 — escalate larger refunds to Gorgias.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number or subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['order_number', 'customer_email'] }
+    },
+    {
+      type: 'function', name: 'create_gorgias_ticket',
+      description: 'Log a call summary to Gorgias as an internal note. Call this at the end of every call where you took action or could not fully resolve the issue.',
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_email: { type: 'string', description: "Customer's email address" },
+          customer_name: { type: 'string', description: "Customer's name" },
+          subject: { type: 'string', description: 'Brief subject line, e.g. "Voice call — subscription cancellation"' },
+          summary: { type: 'string', description: 'What the customer called about, what actions were taken, and any pending follow-up' },
+          priority: { type: 'string', enum: ['routine', 'urgent'], description: "'urgent' for: refund over $150, chargeback/legal, adverse reaction, manager request, batch issue. 'routine' for everything else." }
+        },
+        required: ['customer_email', 'subject', 'summary']
+      }
     }
   ],
   audio: {

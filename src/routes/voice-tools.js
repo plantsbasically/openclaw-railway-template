@@ -4,6 +4,9 @@
 const SHOPIFY_DOMAIN = 'plantsbasically.myshopify.com';
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
 const LOOP_TOKEN = process.env.LOOP_API || process.env.LOOP_API_KEY;
+const GORGIAS_DOMAIN = process.env.GORGIAS_DOMAIN;
+const GORGIAS_EMAIL = process.env.GORGIAS_API_EMAIL;
+const GORGIAS_KEY = process.env.GORGIAS_API_KEY;
 
 // ── Shopify ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +25,24 @@ async function shopify(path, options = {}) {
 
 function orderName(n) {
   return String(n).startsWith('#') ? n : `#${n}`;
+}
+
+// ── Gorgias ───────────────────────────────────────────────────────────────────
+// Base: https://$GORGIAS_DOMAIN/api/ (NOT /api/v1/ — returns 404)
+// Auth: HTTP Basic with GORGIAS_EMAIL:GORGIAS_KEY
+
+async function gorgias(path, options = {}) {
+  const credentials = Buffer.from(`${GORGIAS_EMAIL}:${GORGIAS_KEY}`).toString('base64');
+  const res = await fetch(`https://${GORGIAS_DOMAIN}${path}`, {
+    ...options,
+    headers: {
+      'Authorization': `Basic ${credentials}`,
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`Gorgias ${res.status}: ${await res.text()}`);
+  return res.json();
 }
 
 // ── Loop Subscriptions (confirmed working 2026-05-15) ────────────────────────
@@ -266,10 +287,46 @@ export async function process_refund({ order_number, customer_email }) {
   }
 }
 
+export async function create_gorgias_ticket({ customer_email, customer_name, subject, summary, priority = 'routine' }) {
+  try {
+    const tags = priority === 'urgent'
+      ? [{ name: 'voice-call' }, { name: 'milo-urgent' }]
+      : [{ name: 'voice-call' }];
+
+    const ticket = await gorgias('/api/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'internal-note',
+        via: 'helpdesk',
+        from_agent: true,
+        customer: { email: customer_email, name: customer_name || customer_email },
+        subject,
+        tags,
+        messages: [{
+          channel: 'internal-note',
+          via: 'helpdesk',
+          from_agent: true,
+          public: false,
+          body_text: summary,
+        }],
+      }),
+    });
+
+    return {
+      success: true,
+      ticket_id: ticket.id,
+      message: `Call logged to Gorgias${priority === 'urgent' ? ' — flagged urgent for team review' : ''}.`,
+    };
+  } catch (err) {
+    console.error('[tool] create_gorgias_ticket:', err.message);
+    return { error: err.message };
+  }
+}
+
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund,
+  initiate_return, process_refund, create_gorgias_ticket,
 };
 
 export async function runTool(name, args) {
