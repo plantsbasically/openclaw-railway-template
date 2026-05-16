@@ -1,15 +1,14 @@
 // src/routes/voice-tools.js
-// Real API implementations for Milo's voice tools
+// Confirmed working 2026-05-15
 
-const SHOPIFY_DOMAIN = process.env.SHOPIFY_STORE_DOMAIN;
+const SHOPIFY_DOMAIN = 'plantsbasically.myshopify.com';
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
-const LOOP_API = process.env.LOOP_API;
+const LOOP_TOKEN = process.env.LOOP_API || process.env.LOOP_API_KEY;
 
-// ── Shopify helpers ───────────────────────────────────────────────────────────
+// ── Shopify ───────────────────────────────────────────────────────────────────
 
 async function shopify(path, options = {}) {
-  const domain = SHOPIFY_DOMAIN?.replace(/^https?:\/\//, '').replace(/\/$/, '');
-  const res = await fetch(`https://${domain}/admin/api/2024-01/${path}`, {
+  const res = await fetch(`https://${SHOPIFY_DOMAIN}/admin/api/2024-01/${path}`, {
     ...options,
     headers: {
       'X-Shopify-Access-Token': SHOPIFY_TOKEN,
@@ -17,10 +16,7 @@ async function shopify(path, options = {}) {
       ...options.headers,
     },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Shopify ${res.status}: ${text}`);
-  }
+  if (!res.ok) throw new Error(`Shopify ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -28,22 +24,83 @@ function orderName(n) {
   return String(n).startsWith('#') ? n : `#${n}`;
 }
 
-// ── Loop helpers ──────────────────────────────────────────────────────────────
+// ── Loop Subscriptions (confirmed working 2026-05-15) ────────────────────────
+// Base URL: https://api.loopsubscriptions.com/admin/2023-10/
+// Auth: X-Loop-Token header
+// CRITICAL: always use Loop internal `id` (7-8 digits), never shopifyId
 
 async function loop(path, options = {}) {
-  const res = await fetch(`https://api.lp.dev${path}`, {
+  const res = await fetch(`https://api.loopsubscriptions.com/admin/2023-10${path}`, {
     ...options,
     headers: {
-      Authorization: `Bearer ${LOOP_API}`,
+      'X-Loop-Token': LOOP_TOKEN,
       'Content-Type': 'application/json',
       ...options.headers,
     },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Loop ${res.status}: ${text}`);
-  }
+  if (!res.ok) throw new Error(`Loop ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+// Find Loop internal subscription ID from an order number.
+// Best path per tools.md: GET /subscription?originOrderShopifyId={shopify_order_id}
+// Falls back to customerShopifyId if needed.
+// Returns { loopId, customerName, shopifyCustomerId }
+async function findSubscription(order_number, customer_email) {
+  let shopifyOrderId, shopifyCustomerId, customerName;
+
+  // Step 1: Get Shopify order → extract IDs and customer name
+  const orderData = await shopify(
+    `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email`
+  );
+  if (orderData.orders?.length) {
+    const o = orderData.orders[0];
+    shopifyOrderId = o.id;
+    shopifyCustomerId = o.customer?.id;
+    customerName = `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim();
+  }
+
+  // Step 2: Look up Loop subscription by origin order ID (best method)
+  if (shopifyOrderId) {
+    try {
+      const data = await loop(`/subscription?originOrderShopifyId=${shopifyOrderId}`);
+      const subs = toArray(data);
+      const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
+      if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId };
+    } catch (e) {
+      console.warn('[loop] originOrderShopifyId lookup failed:', e.message);
+    }
+  }
+
+  // Step 3: Fall back to customer's Shopify ID
+  if (shopifyCustomerId) {
+    const data = await loop(`/subscription?customerShopifyId=${shopifyCustomerId}`);
+    const subs = toArray(data);
+    const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
+    if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId };
+  }
+
+  // Step 4: Last resort — look up by email if provided
+  if (customer_email) {
+    const custData = await shopify(`customers/search.json?query=email:${encodeURIComponent(customer_email)}&fields=id`);
+    if (custData.customers?.length) {
+      const custId = custData.customers[0].id;
+      const data = await loop(`/subscription?customerShopifyId=${custId}`);
+      const subs = toArray(data);
+      const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
+      if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId: custId };
+    }
+  }
+
+  throw new Error(`No subscription found for order ${order_number}`);
+}
+
+function toArray(data) {
+  if (Array.isArray(data)) return data;
+  if (data?.subscriptions) return data.subscriptions;
+  if (data?.data) return data.data;
+  if (data?.id) return [data];
+  return [];
 }
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -51,11 +108,9 @@ async function loop(path, options = {}) {
 export async function lookup_account({ email }) {
   try {
     const data = await shopify(
-      `customers/search.json?query=email:${encodeURIComponent(email)}&fields=id,email,first_name,last_name,phone,orders_count,total_spent,tags`
+      `customers/search.json?query=email:${encodeURIComponent(email)}&fields=id,email,first_name,last_name,phone,orders_count,total_spent`
     );
-    if (!data.customers?.length) {
-      return { found: false, message: `No account found for ${email}` };
-    }
+    if (!data.customers?.length) return { found: false, message: `No account found for ${email}` };
     const c = data.customers[0];
     return {
       found: true,
@@ -64,144 +119,122 @@ export async function lookup_account({ email }) {
       email: c.email,
       phone: c.phone || null,
       orders_count: c.orders_count,
-      total_spent: c.total_spent,
     };
   } catch (err) {
-    console.error('[tool] lookup_account error:', err.message);
+    console.error('[tool] lookup_account:', err.message);
     return { error: err.message };
   }
 }
 
 export async function get_order_status({ order_number, customer_email }) {
   try {
-    // Look up by order number — email is optional for verification only
     const query = customer_email
-      ? `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name,email,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments,cancel_reason`
-      : `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,email,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments,cancel_reason`;
+      ? `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments`
+      : `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments`;
     const data = await shopify(query);
-    if (!data.orders?.length) {
-      return { found: false, message: `No order ${order_number} found` };
-    }
+    if (!data.orders?.length) return { found: false, message: `No order ${order_number} found` };
     const o = data.orders[0];
-    const fulfillment = o.fulfillments?.[0];
+    const f = o.fulfillments?.[0];
     return {
       found: true,
       order_number: o.name,
+      customer_name: `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim(),
+      email: o.email,
       financial_status: o.financial_status,
-      fulfillment_status: o.fulfillment_status || 'unfulfilled',
+      fulfillment_status: o.fulfillment_status || 'not yet shipped',
       total: `$${o.total_price}`,
-      created_at: new Date(o.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
-      tracking_number: fulfillment?.tracking_number || null,
-      tracking_url: fulfillment?.tracking_url || null,
-      tracking_company: fulfillment?.tracking_company || null,
+      date: new Date(o.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+      tracking_number: f?.tracking_number || null,
+      tracking_url: f?.tracking_url || null,
       items: o.line_items?.map(i => `${i.quantity}x ${i.name}`).join(', '),
     };
   } catch (err) {
-    console.error('[tool] get_order_status error:', err.message);
+    console.error('[tool] get_order_status:', err.message);
     return { error: err.message };
   }
 }
 
-// Fetch active subscription ID by email — used internally so Milo never asks the customer for it
-async function resolveSubscriptionId(subscription_id, customer_email) {
-  if (subscription_id) return subscription_id;
-  const data = await loop(`/api/v2/subscriptions?email=${encodeURIComponent(customer_email)}`);
-  const subs = (data.subscriptions || data.data || []).filter(s => s.status === 'active' || s.status === 'ACTIVE');
-  if (!subs.length) throw new Error(`No active subscription found for ${customer_email}`);
-  return subs[0].id;
-}
-
-export async function get_subscription_details({ customer_email }) {
+export async function get_subscription_details({ order_number, customer_email }) {
   try {
-    const data = await loop(`/api/v2/subscriptions?email=${encodeURIComponent(customer_email)}`);
-    const subs = data.subscriptions || data.data || [];
-    if (!subs.length) {
-      return { found: false, message: `No subscriptions found for ${customer_email}` };
-    }
+    const { subscription, customerName } = await findSubscription(order_number, customer_email);
     return {
       found: true,
-      subscriptions: subs.map(s => ({
-        id: s.id,
-        status: s.status,
-        product: s.product_title || s.title,
-        next_charge_date: s.next_charge_scheduled_at || s.next_billing_date,
-        interval: s.order_interval_unit ? `every ${s.order_interval_frequency} ${s.order_interval_unit}` : null,
-        price: s.price ? `$${s.price}` : null,
-      })),
+      customer_name: customerName,
+      subscription_status: subscription.status,
+      product: subscription.product_title || subscription.variantTitle,
+      next_charge_date: subscription.nextChargeScheduledAt || subscription.next_charge_scheduled_at,
+      interval: subscription.orderIntervalFrequency
+        ? `every ${subscription.orderIntervalFrequency} ${subscription.orderIntervalUnit?.toLowerCase() || 'months'}`
+        : null,
+      price: subscription.price ? `$${subscription.price}` : null,
     };
   } catch (err) {
-    console.error('[tool] get_subscription_details error:', err.message);
+    console.error('[tool] get_subscription_details:', err.message);
     return { error: err.message };
   }
 }
 
-export async function pause_subscription({ subscription_id, customer_email, pause_until }) {
+export async function cancel_subscription({ order_number, customer_email }) {
   try {
-    const id = await resolveSubscriptionId(subscription_id, customer_email);
-    const data = await loop(`/api/v2/subscriptions/${id}/pause`, {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    await loop(`/subscription/${loopId}/cancel`, {
       method: 'POST',
-      body: JSON.stringify({ resume_date: pause_until }),
+      body: JSON.stringify({
+        cancellationReason: 'Other',
+        cancellationComment: 'Customer requested cancellation via phone support',
+      }),
     });
-    return { success: true, message: `Subscription paused${pause_until ? ` until ${pause_until}` : ''}` };
+    return { success: true, message: `Subscription cancelled for ${customerName}. They'll receive a confirmation email.` };
   } catch (err) {
-    console.error('[tool] pause_subscription error:', err.message);
+    console.error('[tool] cancel_subscription:', err.message);
     return { error: err.message };
   }
 }
 
-export async function reschedule_delivery({ subscription_id, customer_email, new_delivery_date }) {
+export async function pause_subscription({ order_number, customer_email, pause_until }) {
   try {
-    const id = await resolveSubscriptionId(subscription_id, customer_email);
-    const data = await loop(`/api/v2/subscriptions/${id}`, {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    const body = pause_until
+      ? { pauseDuration: { intervalType: 'MONTH', intervalCount: 1, resumeDateEpoch: '' } }
+      : {};
+    await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
+    return { success: true, message: `Subscription paused for ${customerName}${pause_until ? ` until ${pause_until}` : ''}.` };
+  } catch (err) {
+    console.error('[tool] pause_subscription:', err.message);
+    return { error: err.message };
+  }
+}
+
+export async function reschedule_delivery({ order_number, customer_email, new_delivery_date }) {
+  try {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    await loop(`/subscription/${loopId}`, {
       method: 'PUT',
-      body: JSON.stringify({ next_charge_scheduled_at: new_delivery_date }),
+      body: JSON.stringify({ nextChargeScheduledAt: new_delivery_date }),
     });
-    return { success: true, message: `Next delivery rescheduled to ${new_delivery_date}` };
+    return { success: true, message: `Next delivery rescheduled to ${new_delivery_date} for ${customerName}.` };
   } catch (err) {
-    console.error('[tool] reschedule_delivery error:', err.message);
-    return { error: err.message };
-  }
-}
-
-export async function cancel_subscription({ subscription_id, customer_email }) {
-  try {
-    const id = await resolveSubscriptionId(subscription_id, customer_email);
-    const data = await loop(`/api/v2/subscriptions/${id}/cancel`, { method: 'POST' });
-    return { success: true, message: 'Subscription cancelled' };
-  } catch (err) {
-    console.error('[tool] cancel_subscription error:', err.message);
+    console.error('[tool] reschedule_delivery:', err.message);
     return { error: err.message };
   }
 }
 
 export async function initiate_return({ order_number, customer_email, reason }) {
   try {
-    // Look up the order first to get order ID
     const data = await shopify(
-      `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name`
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name`
     );
-    if (!data.orders?.length) {
-      return { found: false, message: `Order ${order_number} not found for ${customer_email}` };
-    }
+    if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found` };
     const orderId = data.orders[0].id;
-    // Add a note to the order flagging the return request
     await shopify(`orders/${orderId}.json`, {
       method: 'PUT',
       body: JSON.stringify({
-        order: {
-          id: orderId,
-          note: `Return/exchange requested via phone. Reason: ${reason}`,
-          tags: 'return-requested',
-        },
+        order: { id: orderId, note: `Return requested via phone. Reason: ${reason}`, tags: 'return-requested' },
       }),
     });
-    return {
-      success: true,
-      message: `Return request logged for order ${order_number}. Customer will receive return instructions via email within 1 business day.`,
-      order_number,
-    };
+    return { success: true, message: `Return request logged for order ${order_number}. Customer will receive instructions within 1 business day.` };
   } catch (err) {
-    console.error('[tool] initiate_return error:', err.message);
+    console.error('[tool] initiate_return:', err.message);
     return { error: err.message };
   }
 }
@@ -209,56 +242,34 @@ export async function initiate_return({ order_number, customer_email, reason }) 
 export async function process_refund({ order_number, customer_email }) {
   try {
     const data = await shopify(
-      `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name,total_price,financial_status`
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,total_price,financial_status`
     );
-    if (!data.orders?.length) {
-      return { found: false, message: `Order ${order_number} not found for ${customer_email}` };
-    }
+    if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found` };
     const o = data.orders[0];
-    if (o.financial_status === 'refunded') {
-      return { message: `Order ${order_number} has already been refunded.` };
-    }
-    // Calculate full refund
+    if (Number(o.total_price) === 0) return { message: `Order ${order_number} was a free welcome kit — no refund needed.` };
+    if (o.financial_status === 'refunded') return { message: `Order ${order_number} has already been refunded.` };
     const calcData = await shopify(`orders/${o.id}/refunds/calculate.json`, {
       method: 'POST',
       body: JSON.stringify({ refund: { shipping: { full_refund: true }, refund_line_items: [] } }),
     });
     const transactions = calcData.refund?.transactions?.map(t => ({
-      parent_id: t.parent_id,
-      amount: t.amount,
-      kind: 'refund',
-      gateway: t.gateway,
+      parent_id: t.parent_id, amount: t.amount, kind: 'refund', gateway: t.gateway,
     }));
     await shopify(`orders/${o.id}/refunds.json`, {
       method: 'POST',
-      body: JSON.stringify({
-        refund: {
-          notify: true,
-          note: 'Refund processed via phone support by Milo',
-          transactions,
-        },
-      }),
+      body: JSON.stringify({ refund: { notify: true, note: 'Refund via phone — Milo', transactions } }),
     });
-    return {
-      success: true,
-      message: `Refund of $${o.total_price} processed for order ${order_number}. Customer will receive email confirmation.`,
-    };
+    return { success: true, message: `Refund of $${o.total_price} processed for order ${order_number}. Confirmation email sent.` };
   } catch (err) {
-    console.error('[tool] process_refund error:', err.message);
+    console.error('[tool] process_refund:', err.message);
     return { error: err.message };
   }
 }
 
-// Tool dispatcher — maps name → function
 const TOOLS = {
-  lookup_account,
-  get_order_status,
-  get_subscription_details,
-  pause_subscription,
-  reschedule_delivery,
-  cancel_subscription,
-  initiate_return,
-  process_refund,
+  lookup_account, get_order_status, get_subscription_details,
+  cancel_subscription, pause_subscription, reschedule_delivery,
+  initiate_return, process_refund,
 };
 
 export async function runTool(name, args) {

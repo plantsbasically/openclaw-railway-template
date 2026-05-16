@@ -29,23 +29,23 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'get_subscription_details',
-      description: 'Retrieve subscription details, next billing/delivery dates, and status.',
-      parameters: { type: 'object', properties: { subscription_id: { type: 'string', description: 'Subscription ID (optional, can lookup by email)' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['customer_email'] }
+      description: 'Get subscription status and next delivery. Use order_number — never ask for a subscription ID.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number (preferred)' }, customer_email: { type: 'string', description: "Customer email (fallback if no order number)" } }, required: [] }
     },
     {
       type: 'function', name: 'pause_subscription',
-      description: 'Pause a subscription. Only needs customer email — never ask the customer for a subscription ID.',
-      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, pause_until: { type: 'string', description: "Natural date to resume, e.g., 'next month'" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email'] }
+      description: 'Pause a subscription. Use order_number — never ask the customer for a subscription ID.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, pause_until: { type: 'string', description: "When to resume, e.g. 'next month'" } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'reschedule_delivery',
-      description: 'Change the next delivery date. Only needs customer email and new date — never ask the customer for a subscription ID.',
-      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, new_delivery_date: { type: 'string', description: "New delivery date in natural format" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email', 'new_delivery_date'] }
+      description: 'Reschedule the next delivery. Use order_number — never ask the customer for a subscription ID.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New date in natural format, e.g. 'two weeks from now'" } }, required: ['order_number', 'new_delivery_date'] }
     },
     {
       type: 'function', name: 'cancel_subscription',
-      description: "Cancel a customer's subscription. Only needs customer email — never ask the customer for a subscription ID.",
-      parameters: { type: 'object', properties: { customer_email: { type: 'string', description: "Customer's email" }, subscription_id: { type: 'string', description: 'Subscription ID (optional — looked up automatically)' } }, required: ['customer_email'] }
+      description: "Cancel a subscription. Use order_number — never ask the customer for a subscription ID. Always attempt retention first (offer pause or skip).",
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'initiate_return',
