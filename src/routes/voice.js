@@ -2,6 +2,7 @@
 import express from 'express';
 import WebSocket from 'ws';
 import twilio from 'twilio';
+import { runTool } from './voice-tools.js';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
@@ -23,8 +24,8 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'get_order_status',
-      description: 'Get order details, status, shipment tracking, and delivery info.',
-      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'The order number' }, customer_email: { type: 'string', description: "Customer's email for verification" } }, required: ['order_number', 'customer_email'] }
+      description: 'Get order details, status, shipment tracking, and delivery info. Email is optional — order number alone is enough.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'The order number (with or without #)' }, customer_email: { type: 'string', description: "Customer's email (optional — only needed if order number is ambiguous)" } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'get_subscription_details',
@@ -135,14 +136,27 @@ export function handleVoiceStream(ws, req) {
         xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
         break;
 
-      case 'response.function_call_arguments.done':
-        console.log('[voice] tool called:', event.name, event.arguments);
-        xaiWs.send(JSON.stringify({
-          type: 'conversation.item.create',
-          item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify({ error: 'Tool not yet implemented' }) }
-        }));
-        xaiWs.send(JSON.stringify({ type: 'response.create' }));
+      case 'response.function_call_arguments.done': {
+        const toolName = event.name;
+        const toolArgs = JSON.parse(event.arguments || '{}');
+        console.log('[voice] tool called:', toolName, toolArgs);
+        runTool(toolName, toolArgs).then(result => {
+          console.log('[voice] tool result:', toolName, JSON.stringify(result));
+          xaiWs.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify(result) }
+          }));
+          xaiWs.send(JSON.stringify({ type: 'response.create' }));
+        }).catch(err => {
+          console.error('[voice] tool error:', toolName, err.message);
+          xaiWs.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: { type: 'function_call_output', call_id: event.call_id, output: JSON.stringify({ error: err.message }) }
+          }));
+          xaiWs.send(JSON.stringify({ type: 'response.create' }));
+        });
         break;
+      }
 
       case 'error':
         console.error('[voice] xAI error:', JSON.stringify(event));
