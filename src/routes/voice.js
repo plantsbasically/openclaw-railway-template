@@ -1,10 +1,24 @@
 // src/routes/voice.js
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
 import WebSocket from 'ws';
 import twilio from 'twilio';
 import { runTool } from './voice-tools.js';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
+const SETUP_PASSWORD = process.env.SETUP_PASSWORD;
+const LOG_DIR = path.join(process.env.OPENCLAW_STATE_DIR || '/data/.openclaw', 'voice-logs');
+
+function saveCallLog(log) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const file = path.join(LOG_DIR, `${log.call_id}.json`);
+    fs.writeFileSync(file, JSON.stringify(log, null, 2));
+  } catch (e) {
+    console.error('[voice] failed to save call log:', e.message);
+  }
+}
 
 const SESSION_CONFIG = {
   voice: 'rex',
@@ -83,15 +97,87 @@ export function setupVoiceHttpRoutes() {
     res.sendStatus(200);
   });
 
+  // GET /voice/logs — view recent call transcripts (password protected)
+  router.get('/logs', (req, res) => {
+    const auth = req.headers.authorization || '';
+    const b64 = auth.replace(/^Basic /, '');
+    const decoded = Buffer.from(b64, 'base64').toString();
+    const password = decoded.split(':')[1];
+    if (!SETUP_PASSWORD || password !== SETUP_PASSWORD) {
+      res.set('WWW-Authenticate', 'Basic realm="Milo Logs"');
+      return res.status(401).send('Unauthorized');
+    }
+
+    const id = req.query.id;
+    try {
+      if (id) {
+        // Single call detail
+        const file = path.join(LOG_DIR, `${id}.json`);
+        if (!fs.existsSync(file)) return res.status(404).json({ error: 'Not found' });
+        return res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
+      }
+
+      // List recent calls
+      if (!fs.existsSync(LOG_DIR)) return res.json({ calls: [] });
+      const files = fs.readdirSync(LOG_DIR)
+        .filter(f => f.endsWith('.json'))
+        .sort()
+        .reverse()
+        .slice(0, 50);
+
+      const calls = files.map(f => {
+        try {
+          const log = JSON.parse(fs.readFileSync(path.join(LOG_DIR, f), 'utf8'));
+          return {
+            call_id: log.call_id,
+            started_at: log.started_at,
+            duration_seconds: log.duration_seconds,
+            turns: log.transcript?.length || 0,
+            tools_used: log.tools_used?.map(t => t.name) || [],
+            preview: log.transcript?.find(t => t.role === 'caller')?.text?.substring(0, 80) || '',
+          };
+        } catch { return null; }
+      }).filter(Boolean);
+
+      res.json({ calls });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   return router;
 }
 
 // WebSocket handler: called directly from server.js upgrade handler
 export function handleVoiceStream(ws, req) {
-  console.log('[voice] call connected');
+  const callId = `call_${Date.now()}`;
+  console.log('[voice] call connected', callId);
 
   let streamSid = null;
   let sessionReady = false;
+
+  // Transcript log — saved to disk when call ends
+  const log = {
+    call_id: callId,
+    started_at: new Date().toISOString(),
+    ended_at: null,
+    duration_seconds: null,
+    transcript: [],   // { role, text, ts }
+    tools_used: [],   // { name, args, result, ts }
+  };
+
+  const startTime = Date.now();
+
+  function addTurn(role, text) {
+    log.transcript.push({ role, text, ts: new Date().toISOString() });
+  }
+
+  function endCall() {
+    log.ended_at = new Date().toISOString();
+    log.duration_seconds = Math.round((Date.now() - startTime) / 1000);
+    saveCallLog(log);
+    console.log(`[voice] call ended — ${log.duration_seconds}s, ${log.transcript.length} turns, saved ${callId}`);
+  }
 
   const xaiWs = new WebSocket('wss://api.x.ai/v1/realtime?model=grok-voice-latest', {
     headers: { Authorization: `Bearer ${XAI_API_KEY}` },
@@ -103,6 +189,9 @@ export function handleVoiceStream(ws, req) {
     console.log('[voice] xAI connected — sending session.update');
     xaiWs.send(JSON.stringify({ type: 'session.update', session: SESSION_CONFIG }));
   });
+
+  // Buffer Milo's streaming transcript delta
+  let miloBuffer = '';
 
   xaiWs.on('message', (data) => {
     let event;
@@ -129,6 +218,26 @@ export function handleVoiceStream(ws, req) {
         }
         break;
 
+      // Collect Milo's transcript as it streams in
+      case 'response.output_audio_transcript.delta':
+        miloBuffer += event.delta || '';
+        break;
+
+      case 'response.output_audio_transcript.done':
+      case 'response.done':
+        if (miloBuffer.trim()) {
+          addTurn('milo', miloBuffer.trim());
+          miloBuffer = '';
+        }
+        break;
+
+      // Collect caller's transcript when xAI finishes transcribing their speech
+      case 'conversation.item.input_audio_transcription.completed':
+        if (event.transcript?.trim()) {
+          addTurn('caller', event.transcript.trim());
+        }
+        break;
+
       case 'input_audio_buffer.speech_started':
         if (streamSid && ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ event: 'clear', streamSid }));
@@ -140,7 +249,10 @@ export function handleVoiceStream(ws, req) {
         const toolName = event.name;
         const toolArgs = JSON.parse(event.arguments || '{}');
         console.log('[voice] tool called:', toolName, toolArgs);
+        const toolEntry = { name: toolName, args: toolArgs, result: null, ts: new Date().toISOString() };
+        log.tools_used.push(toolEntry);
         runTool(toolName, toolArgs).then(result => {
+          toolEntry.result = result;
           console.log('[voice] tool result:', toolName, JSON.stringify(result));
           xaiWs.send(JSON.stringify({
             type: 'conversation.item.create',
@@ -148,6 +260,7 @@ export function handleVoiceStream(ws, req) {
           }));
           xaiWs.send(JSON.stringify({ type: 'response.create' }));
         }).catch(err => {
+          toolEntry.result = { error: err.message };
           console.error('[voice] tool error:', toolName, err.message);
           xaiWs.send(JSON.stringify({
             type: 'conversation.item.create',
@@ -178,6 +291,8 @@ export function handleVoiceStream(ws, req) {
 
     if (data.event === 'start') {
       streamSid = data.start.streamSid;
+      log.stream_sid = streamSid;
+      log.call_sid = data.start.callSid;
       console.log('[voice] Twilio stream started, sid:', streamSid);
     }
 
@@ -189,6 +304,7 @@ export function handleVoiceStream(ws, req) {
 
   ws.on('close', () => {
     console.log('[voice] Twilio WS closed');
+    endCall();
     xaiWs.close();
   });
 
