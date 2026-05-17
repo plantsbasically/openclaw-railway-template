@@ -223,14 +223,20 @@ export async function cancel_subscription({ order_number, customer_email }) {
   }
 }
 
-export async function pause_subscription({ order_number, customer_email, pause_until }) {
+export async function pause_subscription({ order_number, customer_email, pause_months = 1 }) {
   try {
     const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const body = pause_until
-      ? { pauseDuration: { intervalType: 'MONTH', intervalCount: 1, resumeDateEpoch: '' } }
-      : {};
+    const resumeDate = new Date();
+    resumeDate.setMonth(resumeDate.getMonth() + Number(pause_months));
+    const body = {
+      pauseDuration: {
+        intervalType: 'MONTH',
+        intervalCount: Number(pause_months),
+        resumeDateEpoch: Math.floor(resumeDate.getTime() / 1000).toString(),
+      },
+    };
     await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
-    return { success: true, message: `Subscription paused for ${customerName}${pause_until ? ` until ${pause_until}` : ''}.` };
+    return { success: true, message: `Subscription paused for ${customerName} for ${pause_months} month${pause_months > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
   } catch (err) {
     console.error('[tool] pause_subscription:', err.message);
     return { error: err.message };
@@ -307,7 +313,7 @@ export async function create_gorgias_ticket({ customer_email, customer_name, sub
     const ticket = await gorgias('/api/tickets', {
       method: 'POST',
       body: JSON.stringify({
-        channel: 'internal-note',
+        channel: 'phone',
         via: 'helpdesk',
         from_agent: true,
         customer: { email: customer_email, name: customer_name || customer_email },
@@ -334,10 +340,34 @@ export async function create_gorgias_ticket({ customer_email, customer_name, sub
   }
 }
 
+export async function cancel_order({ order_number, customer_email }) {
+  try {
+    const data = await shopify(
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,fulfillment_status,financial_status,total_price`
+    );
+    if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found.` };
+    const o = data.orders[0];
+    if (o.fulfillment_status === 'fulfilled') {
+      return { success: false, message: `Order ${order_number} has already shipped and cannot be cancelled. Offer a return instead.` };
+    }
+    if (o.financial_status === 'voided' || o.financial_status === 'refunded') {
+      return { success: false, message: `Order ${order_number} is already cancelled or refunded.` };
+    }
+    await shopify(`orders/${o.id}/cancel.json`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'customer', email: true }),
+    });
+    return { success: true, message: `Order ${order_number} cancelled. Customer will receive a confirmation email.` };
+  } catch (err) {
+    console.error('[tool] cancel_order:', err.message);
+    return { error: err.message };
+  }
+}
+
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund, create_gorgias_ticket,
+  initiate_return, process_refund, cancel_order, create_gorgias_ticket,
 };
 
 export async function runTool(name, args) {

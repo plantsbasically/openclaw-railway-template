@@ -54,7 +54,7 @@ const SESSION_CONFIG = {
     {
       type: 'function', name: 'pause_subscription',
       description: 'Pause a subscription. Use order_number — never ask the customer for a subscription ID.',
-      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, pause_until: { type: 'string', description: "When to resume, e.g. 'next month'" } }, required: ['order_number'] }
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, pause_months: { type: 'number', description: "Number of months to pause, e.g. 1, 2, or 3. Default 1." } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'reschedule_delivery',
@@ -75,6 +75,11 @@ const SESSION_CONFIG = {
       type: 'function', name: 'process_refund',
       description: 'Issue a refund for an eligible order or subscription. Only use for refunds under $150 — escalate larger refunds to Gorgias.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number or subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['order_number', 'customer_email'] }
+    },
+    {
+      type: 'function', name: 'cancel_order',
+      description: 'Cancel an unfulfilled order in Shopify. If already shipped, tell customer to refuse delivery or initiate a return instead.',
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email" } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'create_gorgias_ticket',
