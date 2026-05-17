@@ -232,11 +232,15 @@ export async function pause_subscription({ order_number, customer_email, pause_m
       pauseDuration: {
         intervalType: 'MONTH',
         intervalCount: Number(pause_months),
-        resumeDateEpoch: Math.floor(resumeDate.getTime() / 1000).toString(),
+        resumeDateEpoch: Math.floor(resumeDate.getTime() / 1000),
       },
     };
-    await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
-    return { success: true, message: `Subscription paused for ${customerName} for ${pause_months} month${pause_months > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
+    const result = await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
+    console.log('[tool] pause_subscription Loop response:', JSON.stringify(result));
+    if (result?.success === false) {
+      return { success: false, message: result.message || 'Loop declined the pause.', loop_response: result };
+    }
+    return { success: true, message: `Subscription paused for ${customerName} for ${pause_months} month${Number(pause_months) > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
   } catch (err) {
     console.error('[tool] pause_subscription:', err.message);
     return { error: err.message };
@@ -310,6 +314,7 @@ export async function create_gorgias_ticket({ customer_email, customer_name, sub
       ? [{ name: 'voice-call' }, { name: 'milo-urgent' }]
       : [{ name: 'voice-call' }];
 
+    // Step 1: create the ticket (no messages — sender field causes 400 when embedded)
     const ticket = await gorgias('/api/tickets', {
       method: 'POST',
       body: JSON.stringify({
@@ -319,13 +324,18 @@ export async function create_gorgias_ticket({ customer_email, customer_name, sub
         customer: { email: customer_email, name: customer_name || customer_email },
         subject,
         tags,
-        messages: [{
-          channel: 'internal-note',
-          via: 'helpdesk',
-          from_agent: true,
-          public: false,
-          body_text: summary,
-        }],
+      }),
+    });
+
+    // Step 2: post the internal note to the created ticket
+    await gorgias(`/api/tickets/${ticket.id}/messages/`, {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'internal-note',
+        via: 'helpdesk',
+        from_agent: true,
+        public: false,
+        body_text: summary,
       }),
     });
 
