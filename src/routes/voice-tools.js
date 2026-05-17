@@ -357,12 +357,17 @@ export async function notify_slack({ message, urgent = false }) {
 // Auto-called at end of every call from voice.js — not a Milo tool
 export async function logCallToGorgias(log) {
   try {
+    if (!GORGIAS_DOMAIN || !GORGIAS_EMAIL || !GORGIAS_KEY) return;
+
     let customerEmail, customerName;
     for (const t of log.tools_used || []) {
       if (t.result?.email) { customerEmail = t.result.email; customerName = t.result.customer_name || t.result.name; break; }
       if (t.args?.customer_email) { customerEmail = t.args.customer_email; break; }
     }
-    if (!customerEmail || !GORGIAS_DOMAIN || !GORGIAS_EMAIL || !GORGIAS_KEY) return;
+
+    // Fall back to caller phone or a placeholder so every call gets logged
+    const callerIdentifier = customerEmail || log.caller_phone || 'unknown@voice.call';
+    const callerLabel = customerName || log.caller_phone || 'Unknown caller';
 
     const toolLines = (log.tools_used || [])
       .map(t => `• ${t.name}: ${JSON.stringify(t.result)?.substring(0, 300)}`)
@@ -375,7 +380,7 @@ export async function logCallToGorgias(log) {
         channel: 'phone',
         via: 'helpdesk',
         from_agent: true,
-        customer: { email: customerEmail, name: customerName || customerEmail },
+        customer: { email: callerIdentifier, name: callerLabel },
         subject: `Milo call — ${new Date(log.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
         tags: [{ name: 'voice-call' }],
       }),

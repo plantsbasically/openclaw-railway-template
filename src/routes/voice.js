@@ -316,7 +316,8 @@ export function handleVoiceStream(ws, req) {
       streamSid = data.start.streamSid;
       log.stream_sid = streamSid;
       log.call_sid = data.start.callSid;
-      console.log('[voice] Twilio stream started, sid:', streamSid);
+      log.caller_phone = data.start.customParameters?.from || data.start.customParameters?.From || null;
+      console.log('[voice] Twilio stream started, sid:', streamSid, 'from:', log.caller_phone);
     }
 
     if (data.event === 'media' && data.media?.track === 'inbound') {
