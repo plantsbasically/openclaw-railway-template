@@ -374,6 +374,7 @@ export async function logCallToGorgias(log) {
       .join('\n') || 'No tools used';
     const summary = `Milo voice call — ${log.duration_seconds}s, ${log.transcript?.length || 0} turns\n\nActions:\n${toolLines}\n\nCall ID: ${log.call_id}`;
 
+    // messages is required (minItems:1) per Gorgias API spec — must be included in creation
     const ticket = await gorgias('/api/tickets', {
       method: 'POST',
       body: JSON.stringify({
@@ -383,11 +384,14 @@ export async function logCallToGorgias(log) {
         customer: { email: callerIdentifier, name: callerLabel },
         subject: `Milo call — ${new Date(log.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
         tags: [{ name: 'voice-call' }],
+        messages: [{
+          channel: 'internal-note',
+          via: 'helpdesk',
+          from_agent: true,
+          public: false,
+          body_text: summary,
+        }],
       }),
-    });
-    await gorgias(`/api/tickets/${ticket.id}/messages/`, {
-      method: 'POST',
-      body: JSON.stringify({ channel: 'internal-note', via: 'helpdesk', from_agent: true, public: false, body_text: summary }),
     });
     console.log('[voice] call auto-logged to Gorgias ticket', ticket.id);
   } catch (err) {
