@@ -242,11 +242,11 @@ export async function pause_subscription({ order_number, customer_email, pause_m
       },
     };
     const result = await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
-    console.log('[tool] pause_subscription Loop response:', JSON.stringify(result));
+    console.log('[tool] pause_subscription loopId:', loopId, 'response:', JSON.stringify(result));
     if (result?.success === false) {
-      return { success: false, message: result.message || 'Loop declined the pause.', loop_response: result };
+      return { success: false, loop_id: loopId, loop_response: result, message: result.message || 'Loop declined the pause.' };
     }
-    return { success: true, message: `Subscription paused for ${customerName} for ${pause_months} month${Number(pause_months) > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
+    return { success: true, loop_id: loopId, loop_response: result, message: `Subscription paused for ${customerName} for ${pause_months} month${Number(pause_months) > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
   } catch (err) {
     console.error('[tool] pause_subscription:', err.message);
     return { error: err.message };
