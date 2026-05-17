@@ -189,16 +189,23 @@ export async function get_order_status({ order_number, customer_email }) {
 export async function get_subscription_details({ order_number, customer_email }) {
   try {
     const { subscription, customerName } = await findSubscription(order_number, customer_email);
+    const line = subscription.lines?.[0];
+    const nextDate = subscription.nextBillingDateEpoch
+      ? new Date(subscription.nextBillingDateEpoch * 1000).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : null;
+    const bp = subscription.billingPolicy;
+    const interval = bp?.intervalCount
+      ? `every ${bp.intervalCount} ${bp.interval?.toLowerCase() || 'month'}${bp.intervalCount > 1 ? 's' : ''}`
+      : null;
     return {
       found: true,
       customer_name: customerName,
       subscription_status: subscription.status,
-      product: subscription.product_title || subscription.variantTitle,
-      next_charge_date: subscription.nextChargeScheduledAt || subscription.next_charge_scheduled_at,
-      interval: subscription.orderIntervalFrequency
-        ? `every ${subscription.orderIntervalFrequency} ${subscription.orderIntervalUnit?.toLowerCase() || 'months'}`
-        : null,
-      price: subscription.price ? `$${subscription.price}` : null,
+      product: line?.productTitle || line?.name || null,
+      next_charge_date: nextDate,
+      interval,
+      price: line?.price ? `$${line.price}` : null,
+      paused_at: subscription.pausedAt || null,
     };
   } catch (err) {
     console.error('[tool] get_subscription_details:', err.message);
