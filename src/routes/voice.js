@@ -77,6 +77,20 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number or subscription ID' }, customer_email: { type: 'string', description: "Customer's email" } }, required: ['order_number', 'customer_email'] }
     },
     {
+      type: 'function', name: 'apply_discount',
+      description: 'Apply a percentage discount to a subscription as a retention save. Use before cancelling — offer this alongside pause/cadence change.',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_number: { type: 'string', description: 'Order number' },
+          customer_email: { type: 'string', description: 'Customer email (fallback)' },
+          percent: { type: 'number', description: 'Discount percentage. Default 5.' },
+          orders: { type: 'number', description: 'Number of orders to apply it to. Default 1.' }
+        },
+        required: ['order_number']
+      }
+    },
+    {
       type: 'function', name: 'cancel_order',
       description: 'Cancel an unfulfilled order in Shopify. If already shipped, tell customer to refuse delivery or initiate a return instead.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email" } }, required: ['order_number'] }

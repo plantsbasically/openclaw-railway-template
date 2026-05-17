@@ -426,10 +426,33 @@ export async function cancel_order({ order_number, customer_email }) {
   }
 }
 
+export async function apply_discount({ order_number, customer_email, percent = 5, orders = 1 }) {
+  try {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    const result = await loop(`/subscription/${loopId}/discount`, {
+      method: 'POST',
+      body: JSON.stringify({
+        manualDiscount: {
+          title: `Milo retention discount`,
+          type: 'PERCENTAGE',
+          value: Number(percent),
+          orderLimit: Number(orders),
+          lineIds: null,
+        },
+      }),
+    });
+    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the discount.' };
+    return { success: true, message: `${percent}% discount applied to ${customerName}'s next ${orders} order${orders > 1 ? 's' : ''}.` };
+  } catch (err) {
+    console.error('[tool] apply_discount:', err.message);
+    return { error: err.message };
+  }
+}
+
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund, cancel_order, notify_slack,
+  initiate_return, process_refund, cancel_order, apply_discount, notify_slack,
 };
 
 export async function runTool(name, args) {
