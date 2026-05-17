@@ -227,7 +227,7 @@ export function handleVoiceStream(ws, req) {
         console.log('[voice] session ready — prompting Milo to greet');
         xaiWs.send(JSON.stringify({
           type: 'conversation.item.create',
-          item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Greet the caller and introduce yourself.' }] }
+          item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Greet the caller. Say hello, your name is Milo, and ask how you can help. Nothing else — no listing of capabilities, no menu of options.' }] }
         }));
         xaiWs.send(JSON.stringify({ type: 'response.create' }));
         break;
