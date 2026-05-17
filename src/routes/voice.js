@@ -87,7 +87,7 @@ const SESSION_CONFIG = {
       parameters: {
         type: 'object',
         properties: {
-          message: { type: 'string', description: 'What happened, what you did, what needs human follow-up. Include customer name and order number.' },
+          message: { type: 'string', description: 'What happened and what needs follow-up. MUST include customer name, email or phone, and order number if known.' },
           urgent: { type: 'boolean', description: 'true to @mention Kyle directly. Use for: chargeback/legal, adverse reaction, refund over $150, manager request, batch quality issue.' }
         },
         required: ['message']
