@@ -75,24 +75,42 @@ async function loop(path, options = {}) {
 }
 
 // Find Loop internal subscription ID from an order number.
-// Best path per tools.md: GET /subscription?originOrderShopifyId={shopify_order_id}
-// Falls back to customerShopifyId if needed.
+// Priority: Shopify order tag "Subscription #shopifyId" → direct Loop lookup via shopify-{id}
+// Falls back to originOrderShopifyId, then customerShopifyId.
 // Returns { loopId, customerName, shopifyCustomerId }
 async function findSubscription(order_number, customer_email) {
-  let shopifyOrderId, shopifyCustomerId, customerName;
+  let shopifyOrderId, shopifyCustomerId, customerName, orderTags;
 
-  // Step 1: Get Shopify order → extract IDs and customer name
+  // Step 1: Get Shopify order → extract IDs, customer name, and tags
   const orderData = await shopify(
-    `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email`
+    `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email,tags`
   );
   if (orderData.orders?.length) {
     const o = orderData.orders[0];
     shopifyOrderId = o.id;
     shopifyCustomerId = o.customer?.id;
     customerName = `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim();
+    orderTags = o.tags || '';
   }
 
-  // Step 2: Look up Loop subscription by origin order ID (best method)
+  // Step 2: Best method — parse "Subscription #shopifyId" tag and look up directly
+  // Loop accepts shopify-{shopifyId} path format per API docs
+  const subTag = orderTags?.split(',').map(t => t.trim()).find(t => t.startsWith('Subscription #'));
+  if (subTag) {
+    const shopifySubId = subTag.replace('Subscription #', '').trim();
+    try {
+      const data = await loop(`/subscription/shopify-${shopifySubId}`);
+      const sub = data?.data;
+      if (sub?.id) {
+        console.log('[loop] found via order tag shopify-' + shopifySubId + ' → loopId', sub.id);
+        return { loopId: sub.id, subscription: sub, customerName, shopifyCustomerId };
+      }
+    } catch (e) {
+      console.warn('[loop] shopify subscription tag lookup failed:', e.message);
+    }
+  }
+
+  // Step 3: Fall back to originOrderShopifyId
   if (shopifyOrderId) {
     try {
       const data = await loop(`/subscription?originOrderShopifyId=${shopifyOrderId}`);
@@ -161,8 +179,8 @@ export async function lookup_account({ email }) {
 export async function get_order_status({ order_number, customer_email }) {
   try {
     const query = customer_email
-      ? `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments`
-      : `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments`;
+      ? `orders.json?name=${encodeURIComponent(orderName(order_number))}&email=${encodeURIComponent(customer_email)}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments,tags`
+      : `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,email,customer,financial_status,fulfillment_status,created_at,total_price,line_items,fulfillments,tags`;
     const data = await shopify(query);
     if (!data.orders?.length) return { found: false, message: `No order ${order_number} found` };
     const o = data.orders[0];
@@ -179,6 +197,7 @@ export async function get_order_status({ order_number, customer_email }) {
       tracking_number: f?.tracking_number || null,
       tracking_url: f?.tracking_url || null,
       items: o.line_items?.map(i => `${i.quantity}x ${i.name}`).join(', '),
+      tags: o.tags || null,
     };
   } catch (err) {
     console.error('[tool] get_order_status:', err.message);
