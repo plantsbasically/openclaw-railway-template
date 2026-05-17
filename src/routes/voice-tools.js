@@ -390,6 +390,7 @@ export async function logCallToGorgias(log) {
           from_agent: true,
           public: false,
           body_text: summary,
+          sender: { email: callerIdentifier, name: callerLabel },
         }],
       }),
     });
