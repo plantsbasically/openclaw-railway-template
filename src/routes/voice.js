@@ -106,10 +106,13 @@ export function setupVoiceHttpRoutes() {
 
   router.post('/incoming', (req, res) => {
     const host = req.headers.host;
+    const from = req.body?.From || '';
     res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="wss://${host}/voice/stream" statusCallback="https://${host}/voice/status" />
+    <Stream url="wss://${host}/voice/stream" statusCallback="https://${host}/voice/status">
+      <Parameter name="from" value="${from}"/>
+    </Stream>
   </Connect>
 </Response>`);
   });
@@ -194,12 +197,13 @@ export function handleVoiceStream(ws, req) {
     log.transcript.push({ role, text, ts: new Date().toISOString() });
   }
 
-  function endCall() {
+  async function endCall() {
     log.ended_at = new Date().toISOString();
     log.duration_seconds = Math.round((Date.now() - startTime) / 1000);
+    const gorgiasResult = await logCallToGorgias(log);
+    log.gorgias = gorgiasResult || null;
     saveCallLog(log);
-    logCallToGorgias(log); // fire-and-forget
-    console.log(`[voice] call ended — ${log.duration_seconds}s, ${log.transcript.length} turns, saved ${callId}`);
+    console.log(`[voice] call ended — ${log.duration_seconds}s, ${log.transcript.length} turns, saved ${callId}, gorgias:`, JSON.stringify(gorgiasResult));
   }
 
   const xaiWs = new WebSocket('wss://api.x.ai/v1/realtime?model=grok-voice-latest', {

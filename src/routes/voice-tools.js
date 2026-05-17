@@ -393,9 +393,11 @@ export async function logCallToGorgias(log) {
         }],
       }),
     });
-    console.log('[voice] call auto-logged to Gorgias ticket', ticket.id);
+    console.log('[auto-gorgias] ticket created:', ticket.id);
+    return { success: true, ticket_id: ticket.id };
   } catch (err) {
-    console.error('[voice] auto Gorgias log failed:', err.message);
+    console.error('[auto-gorgias] failed:', err.message);
+    return { success: false, error: err.message };
   }
 }
 
