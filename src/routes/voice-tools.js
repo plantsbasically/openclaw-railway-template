@@ -232,7 +232,6 @@ export async function pause_subscription({ order_number, customer_email, pause_m
       pauseDuration: {
         intervalType: 'MONTH',
         intervalCount: Number(pause_months),
-        resumeDateEpoch: Math.floor(resumeDate.getTime() / 1000),
       },
     };
     const result = await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
