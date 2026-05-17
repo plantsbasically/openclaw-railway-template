@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import twilio from 'twilio';
-import { runTool } from './voice-tools.js';
+import { runTool, logCallToGorgias } from './voice-tools.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,18 +82,15 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email" } }, required: ['order_number'] }
     },
     {
-      type: 'function', name: 'create_gorgias_ticket',
-      description: 'Log a call summary to Gorgias as an internal note. Call this at the end of every call where you took action or could not fully resolve the issue.',
+      type: 'function', name: 'notify_slack',
+      description: 'Send a message to the Plants Basically team in Slack. Use for escalations that need immediate human attention.',
       parameters: {
         type: 'object',
         properties: {
-          customer_email: { type: 'string', description: "Customer's email address" },
-          customer_name: { type: 'string', description: "Customer's name" },
-          subject: { type: 'string', description: 'Brief subject line, e.g. "Voice call — subscription cancellation"' },
-          summary: { type: 'string', description: 'What the customer called about, what actions were taken, and any pending follow-up' },
-          priority: { type: 'string', enum: ['routine', 'urgent'], description: "'urgent' for: refund over $150, chargeback/legal, adverse reaction, manager request, batch issue. 'routine' for everything else." }
+          message: { type: 'string', description: 'What happened, what you did, what needs human follow-up. Include customer name and order number.' },
+          urgent: { type: 'boolean', description: 'true to @mention Kyle directly. Use for: chargeback/legal, adverse reaction, refund over $150, manager request, batch quality issue.' }
         },
-        required: ['customer_email', 'subject', 'summary']
+        required: ['message']
       }
     }
   ],
@@ -201,6 +198,7 @@ export function handleVoiceStream(ws, req) {
     log.ended_at = new Date().toISOString();
     log.duration_seconds = Math.round((Date.now() - startTime) / 1000);
     saveCallLog(log);
+    logCallToGorgias(log); // fire-and-forget
     console.log(`[voice] call ended — ${log.duration_seconds}s, ${log.transcript.length} turns, saved ${callId}`);
   }
 

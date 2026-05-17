@@ -7,6 +7,8 @@ const LOOP_TOKEN = process.env.LOOP_API || process.env.LOOP_API_KEY;
 const GORGIAS_DOMAIN = process.env.GORGIAS_DOMAIN;
 const GORGIAS_EMAIL = process.env.GORGIAS_API_EMAIL;
 const GORGIAS_KEY = process.env.GORGIAS_API_KEY;
+const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
+const SLACK_KYLE_USER_ID = process.env.SLACK_KYLE_USER_ID;
 
 const REQUIRED_VARS = {
   SHOPIFY_ADMIN_API_ACCESS_TOKEN: SHOPIFY_TOKEN,
@@ -14,6 +16,7 @@ const REQUIRED_VARS = {
   GORGIAS_DOMAIN,
   GORGIAS_API_EMAIL: GORGIAS_EMAIL,
   GORGIAS_API_KEY: GORGIAS_KEY,
+  SLACK_WEBHOOK_URL,
 };
 for (const [name, val] of Object.entries(REQUIRED_VARS)) {
   if (!val) console.warn(`[voice-tools] WARNING: ${name} is not set — tool calls will fail`);
@@ -333,45 +336,57 @@ export async function process_refund({ order_number, customer_email }) {
   }
 }
 
-export async function create_gorgias_ticket({ customer_email, customer_name, subject, summary, priority = 'routine' }) {
+export async function notify_slack({ message, urgent = false }) {
   try {
-    const tags = priority === 'urgent'
-      ? [{ name: 'voice-call' }, { name: 'milo-urgent' }]
-      : [{ name: 'voice-call' }];
+    const text = urgent
+      ? `🚨 *Escalation needed* — <@${SLACK_KYLE_USER_ID}>\n${message}`
+      : `📞 *Milo voice call note*\n${message}`;
+    const res = await fetch(SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) throw new Error(`Slack ${res.status}: ${await res.text()}`);
+    return { success: true, message: urgent ? 'Escalation sent to team.' : 'Note sent to team.' };
+  } catch (err) {
+    console.error('[tool] notify_slack:', err.message);
+    return { error: err.message };
+  }
+}
 
-    // Step 1: create the ticket (no messages — sender field causes 400 when embedded)
+// Auto-called at end of every call from voice.js — not a Milo tool
+export async function logCallToGorgias(log) {
+  try {
+    let customerEmail, customerName;
+    for (const t of log.tools_used || []) {
+      if (t.result?.email) { customerEmail = t.result.email; customerName = t.result.customer_name || t.result.name; break; }
+      if (t.args?.customer_email) { customerEmail = t.args.customer_email; break; }
+    }
+    if (!customerEmail || !GORGIAS_DOMAIN || !GORGIAS_EMAIL || !GORGIAS_KEY) return;
+
+    const toolLines = (log.tools_used || [])
+      .map(t => `• ${t.name}: ${JSON.stringify(t.result)?.substring(0, 300)}`)
+      .join('\n') || 'No tools used';
+    const summary = `Milo voice call — ${log.duration_seconds}s, ${log.transcript?.length || 0} turns\n\nActions:\n${toolLines}\n\nCall ID: ${log.call_id}`;
+
     const ticket = await gorgias('/api/tickets', {
       method: 'POST',
       body: JSON.stringify({
         channel: 'phone',
         via: 'helpdesk',
         from_agent: true,
-        customer: { email: customer_email, name: customer_name || customer_email },
-        subject,
-        tags,
+        customer: { email: customerEmail, name: customerName || customerEmail },
+        subject: `Milo call — ${new Date(log.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        tags: [{ name: 'voice-call' }],
       }),
     });
-
-    // Step 2: post the internal note to the created ticket
     await gorgias(`/api/tickets/${ticket.id}/messages/`, {
       method: 'POST',
-      body: JSON.stringify({
-        channel: 'internal-note',
-        via: 'helpdesk',
-        from_agent: true,
-        public: false,
-        body_text: summary,
-      }),
+      body: JSON.stringify({ channel: 'internal-note', via: 'helpdesk', from_agent: true, public: false, body_text: summary }),
     });
-
-    return {
-      success: true,
-      ticket_id: ticket.id,
-      message: `Call logged to Gorgias${priority === 'urgent' ? ' — flagged urgent for team review' : ''}.`,
-    };
+    console.log('[voice] call auto-logged to Gorgias ticket', ticket.id);
   } catch (err) {
-    console.error('[tool] create_gorgias_ticket:', err.message);
-    return { error: err.message };
+    console.error('[voice] auto Gorgias log failed:', err.message);
   }
 }
 
@@ -402,7 +417,7 @@ export async function cancel_order({ order_number, customer_email }) {
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund, cancel_order, create_gorgias_ticket,
+  initiate_return, process_refund, cancel_order, notify_slack,
 };
 
 export async function runTool(name, args) {
