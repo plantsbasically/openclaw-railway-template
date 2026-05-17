@@ -8,6 +8,17 @@ const GORGIAS_DOMAIN = process.env.GORGIAS_DOMAIN;
 const GORGIAS_EMAIL = process.env.GORGIAS_API_EMAIL;
 const GORGIAS_KEY = process.env.GORGIAS_API_KEY;
 
+const REQUIRED_VARS = {
+  SHOPIFY_ADMIN_API_ACCESS_TOKEN: SHOPIFY_TOKEN,
+  LOOP_API_KEY: LOOP_TOKEN,
+  GORGIAS_DOMAIN,
+  GORGIAS_API_EMAIL: GORGIAS_EMAIL,
+  GORGIAS_API_KEY: GORGIAS_KEY,
+};
+for (const [name, val] of Object.entries(REQUIRED_VARS)) {
+  if (!val) console.warn(`[voice-tools] WARNING: ${name} is not set — tool calls will fail`);
+}
+
 // ── Shopify ───────────────────────────────────────────────────────────────────
 
 async function shopify(path, options = {}) {
