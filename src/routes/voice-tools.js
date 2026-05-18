@@ -278,11 +278,15 @@ export async function pause_subscription({ order_number, customer_email, pause_m
 export async function reschedule_delivery({ order_number, customer_email, new_delivery_date }) {
   try {
     const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    await loop(`/subscription/${loopId}`, {
-      method: 'PUT',
-      body: JSON.stringify({ nextChargeScheduledAt: new_delivery_date }),
+    const epoch = Math.floor(new Date(new_delivery_date).getTime() / 1000);
+    if (isNaN(epoch)) return { error: `Invalid date: ${new_delivery_date}. Use YYYY-MM-DD format.` };
+    const result = await loop(`/subscription/${loopId}/reschedule`, {
+      method: 'POST',
+      body: JSON.stringify({ newBillingDateEpoch: epoch, rescheduleFutureOrders: false }),
     });
-    return { success: true, message: `Next delivery rescheduled to ${new_delivery_date} for ${customerName}.` };
+    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the reschedule.' };
+    const formatted = new Date(new_delivery_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    return { success: true, message: `Next delivery rescheduled to ${formatted} for ${customerName}.` };
   } catch (err) {
     console.error('[tool] reschedule_delivery:', err.message);
     return { error: err.message };

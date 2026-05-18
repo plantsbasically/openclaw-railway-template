@@ -59,7 +59,7 @@ const SESSION_CONFIG = {
     {
       type: 'function', name: 'reschedule_delivery',
       description: 'Reschedule the next delivery. Use order_number — never ask the customer for a subscription ID.',
-      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New date in natural format, e.g. 'two weeks from now'" } }, required: ['order_number', 'new_delivery_date'] }
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New billing date in YYYY-MM-DD format, e.g. '2026-08-01'. Confirm the date with the customer before calling." } }, required: ['order_number', 'new_delivery_date'] }
     },
     {
       type: 'function', name: 'cancel_subscription',
