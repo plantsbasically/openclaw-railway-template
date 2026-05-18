@@ -273,7 +273,7 @@ Email the customer their Loop subscription portal link so they can update their 
 
 **API** `POST /api/tickets` (Gorgias — sends outbound email)
 
-**Portal URL** `https://www.plantsbasically.com/a/loop_subscriptions/`
+**Portal URL** `https://www.plantsbasically.com/subscriptions`
 
 ---
 

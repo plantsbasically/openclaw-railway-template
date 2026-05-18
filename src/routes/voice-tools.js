@@ -388,7 +388,7 @@ export async function send_portal_link({ customer_email, customer_name }) {
           via: 'helpdesk',
           from_agent: true,
           public: true,
-          body_text: `Hi ${name},\n\nHere's your link to manage your subscription — you can update your payment method, view upcoming orders, and more:\n\nhttps://www.plantsbasically.com/a/loop_subscriptions/\n\nLet us know if you need anything else.\n\n— The Plants Basically Team`,
+          body_text: `Hi ${name},\n\nHere's your link to manage your subscription — you can update your payment method, view upcoming orders, and more:\n\nhttps://www.plantsbasically.com/subscriptions\n\nLet us know if you need anything else.\n\n— The Plants Basically Team`,
           sender: { email: GORGIAS_EMAIL, name: 'Plants Basically' },
           receiver: { email: customer_email },
         }],
