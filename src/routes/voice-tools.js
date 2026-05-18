@@ -22,6 +22,28 @@ for (const [name, val] of Object.entries(REQUIRED_VARS)) {
   if (!val) console.warn(`[voice-tools] WARNING: ${name} is not set — tool calls will fail`);
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const US_PROVINCE_CODES = {
+  'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
+  'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
+  'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA',
+  'kansas':'KS','kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD',
+  'massachusetts':'MA','michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO',
+  'montana':'MT','nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ',
+  'new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH',
+  'oklahoma':'OK','oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
+  'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
+  'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
+  'district of columbia':'DC',
+};
+
+function toProvinceCode(province) {
+  if (!province) return '';
+  if (province.length === 2) return province.toUpperCase();
+  return US_PROVINCE_CODES[province.toLowerCase()] || province.substring(0, 2).toUpperCase();
+}
+
 // ── Shopify ───────────────────────────────────────────────────────────────────
 
 async function shopify(path, options = {}) {
@@ -472,7 +494,33 @@ export async function update_order_address({ order_number, address1, address2 = 
       }),
     });
     const formatted = [address1, address2, city, province, zip].filter(Boolean).join(', ');
-    return { success: true, message: `Shipping address on order ${order_number} updated to: ${formatted}.` };
+
+    // Also update Loop subscription address so future recurring orders go to the same place
+    let subscriptionUpdated = false;
+    try {
+      const { loopId } = await findSubscription(order_number, null);
+      await loop(`/subscription/${loopId}/address`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          address1,
+          address2: address2 || '',
+          city,
+          provinceCode: toProvinceCode(province),
+          countryCode: country_code,
+          zip,
+        }),
+      });
+      subscriptionUpdated = true;
+    } catch (e) {
+      console.warn('[tool] update_order_address: Loop subscription address update skipped:', e.message);
+    }
+
+    const suffix = subscriptionUpdated
+      ? 'Updated on both this order and future subscription deliveries.'
+      : 'Updated on this order. No active subscription found, so no future orders affected.';
+    return { success: true, message: `Shipping address updated to: ${formatted}. ${suffix}` };
   } catch (err) {
     console.error('[tool] update_order_address:', err.message);
     return { error: err.message };
