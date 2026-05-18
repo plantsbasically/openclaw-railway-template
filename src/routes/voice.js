@@ -152,6 +152,18 @@ const SESSION_CONFIG = {
       }
     },
     {
+      type: 'function', name: 'send_portal_link',
+      description: "Email the customer their subscription portal link. Use when they need to update their payment method — don't escalate to Slack for this.",
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_email: { type: 'string', description: "Customer's email address" },
+          customer_name: { type: 'string', description: "Customer's full name" },
+        },
+        required: ['customer_email']
+      }
+    },
+    {
       type: 'function', name: 'notify_slack',
       description: 'Send a message to the Plants Basically team in Slack. Use for escalations that need immediate human attention.',
       parameters: {

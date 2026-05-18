@@ -372,6 +372,36 @@ export async function process_refund({ order_number, customer_email }) {
   }
 }
 
+export async function send_portal_link({ customer_email, customer_name }) {
+  try {
+    const name = customer_name?.split(' ')[0] || 'there';
+    await gorgias('/api/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'email',
+        via: 'helpdesk',
+        from_agent: true,
+        customer: { email: customer_email, name: customer_name || customer_email },
+        subject: 'Your Plants Basically subscription portal',
+        tags: [{ name: 'voice-call' }],
+        messages: [{
+          channel: 'email',
+          via: 'helpdesk',
+          from_agent: true,
+          public: true,
+          body_text: `Hi ${name},\n\nHere's your link to manage your subscription — you can update your payment method, view upcoming orders, and more:\n\nhttps://www.plantsbasically.com/a/loop_subscriptions/\n\nLet us know if you need anything else.\n\n— The Plants Basically Team`,
+          sender: { email: GORGIAS_EMAIL, name: 'Plants Basically' },
+          receiver: { email: customer_email },
+        }],
+      }),
+    });
+    return { success: true, message: `Portal link sent to ${customer_email}.` };
+  } catch (err) {
+    console.error('[tool] send_portal_link:', err.message);
+    return { error: err.message };
+  }
+}
+
 export async function notify_slack({ message, urgent = false }) {
   try {
     const text = urgent
@@ -620,7 +650,7 @@ const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, resume_subscription, reschedule_delivery,
   initiate_return, process_refund, cancel_order, apply_discount, update_subscription_frequency,
-  change_subscription_bottles, update_order_address, notify_slack,
+  change_subscription_bottles, update_order_address, send_portal_link, notify_slack,
 };
 
 export async function runTool(name, args) {
