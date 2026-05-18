@@ -1,6 +1,17 @@
 # Milo Tool Reference
 
-All tools available to Milo on inbound calls. Each entry shows the function name, parameters, what API it hits, and what it returns.
+All tools available to Milo on inbound calls. Includes exact API endpoints for verification.
+
+---
+
+## Base URLs
+
+| Service | Base URL | Auth |
+|---------|----------|------|
+| Shopify | `https://plantsbasically.myshopify.com/admin/api/2024-01/` | `X-Shopify-Access-Token: SHOPIFY_ADMIN_API_ACCESS_TOKEN` |
+| Loop | `https://api.loopsubscriptions.com/admin/2023-10/` | `X-Loop-Token: LOOP_API_KEY` |
+| Gorgias | `https://plantsbasically.gorgias.com/` | Basic auth `GORGIAS_API_EMAIL:GORGIAS_API_KEY` |
+| Slack | `SLACK_WEBHOOK_URL` (env) | None |
 
 ---
 
@@ -14,9 +25,14 @@ Look up a customer by email to confirm identity.
 |------|------|----------|
 | `email` | string | yes |
 
-**Returns** `customer_id`, `name`, `email`, `phone`, `orders_count`
+**Endpoint**
+```
+GET /admin/api/2024-01/customers/search.json
+  ?query=email:{email}
+  &fields=id,email,first_name,last_name,phone,orders_count,total_spent
+```
 
-**API** `GET /customers/search.json?query=email:{email}`
+**Returns** `customer_id`, `name`, `email`, `phone`, `orders_count`
 
 ---
 
@@ -29,14 +45,21 @@ Get order details, fulfillment status, tracking, and line items.
 | `order_number` | string | yes |
 | `customer_email` | string | no |
 
-**Returns** `order_number`, `customer_name`, `email`, `financial_status`, `fulfillment_status`, `total`, `date`, `tracking_number`, `tracking_url`, `items`, `tags`
+**Endpoint**
+```
+GET /admin/api/2024-01/orders.json
+  ?name={order_number}
+  &status=any
+  &fields=id,name,email,customer,financial_status,fulfillment_status,
+          created_at,total_price,line_items,fulfillments,tags
+```
 
-**API** `GET /orders.json?name={order_number}`
+**Returns** `order_number`, `customer_name`, `email`, `financial_status`, `fulfillment_status`, `total`, `date`, `tracking_number`, `tracking_url`, `items`, `tags`
 
 ---
 
 ### `update_order_address`
-Update the shipping address on an unshipped order. Also updates the Loop subscription address so future recurring orders go to the same place.
+Update the shipping address on an unshipped order. Also updates the Loop subscription for future recurring orders.
 
 **Parameters**
 | Name | Type | Required |
@@ -44,16 +67,26 @@ Update the shipping address on an unshipped order. Also updates the Loop subscri
 | `order_number` | string | yes |
 | `address1` | string | yes |
 | `city` | string | yes |
-| `province` | string | yes (full state name or 2-letter code) |
+| `province` | string | yes |
 | `zip` | string | yes |
 | `address2` | string | no |
 | `country_code` | string | no (default: `US`) |
 
-**Returns** success message with formatted address, notes whether subscription was also updated.
+**Endpoints**
+```
+# 1. Fetch order
+GET /admin/api/2024-01/orders.json
+  ?name={order_number}&status=any
+  &fields=id,name,fulfillment_status,shipping_address,customer
 
-**API**
-- `PUT /orders/{id}.json` (Shopify — current order)
-- `PUT /subscription/{loopId}/address` (Loop — future orders)
+# 2. Update Shopify order address
+PUT /admin/api/2024-01/orders/{order_id}.json
+Body: { "order": { "id": ..., "shipping_address": { "address1", "city", "province", "zip", "country_code", ... } } }
+
+# 3. Update Loop subscription address (for future orders)
+PUT https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/address
+Body: { "firstName", "lastName", "address1", "address2", "city", "provinceCode", "countryCode", "zip" }
+```
 
 **Guards** Returns error if order is already fulfilled.
 
@@ -68,16 +101,24 @@ Cancel an unfulfilled Shopify order.
 | `order_number` | string | yes |
 | `customer_email` | string | no |
 
-**Returns** success or reason it can't be cancelled (already shipped, already refunded).
+**Endpoints**
+```
+# 1. Fetch order
+GET /admin/api/2024-01/orders.json
+  ?name={order_number}&status=any
+  &fields=id,name,fulfillment_status,financial_status,total_price
 
-**API** `POST /orders/{id}/cancel.json`
+# 2. Cancel
+POST /admin/api/2024-01/orders/{order_id}/cancel.json
+Body: { "reason": "customer", "email": true }
+```
 
-**Guards** Blocks if `fulfillment_status === 'fulfilled'` or order already voided/refunded.
+**Guards** Blocks if `fulfillment_status === 'fulfilled'` or already voided/refunded.
 
 ---
 
 ### `process_refund`
-Issue a full refund on an order including line items and shipping.
+Issue a full refund on an order including all line items and shipping.
 
 **Parameters**
 | Name | Type | Required |
@@ -85,17 +126,41 @@ Issue a full refund on an order including line items and shipping.
 | `order_number` | string | yes |
 | `customer_email` | string | no |
 
-**Returns** success with refund amount, or reason it was blocked.
+**Endpoints**
+```
+# 1. Fetch order + line items
+GET /admin/api/2024-01/orders.json
+  ?name={order_number}&status=any
+  &fields=id,name,total_price,financial_status,fulfillment_status,line_items
 
-**API**
-- `POST /orders/{id}/refunds/calculate.json` (calculate first)
-- `POST /orders/{id}/refunds.json` (create refund)
+# 2. Calculate refund (get transaction amounts)
+POST /admin/api/2024-01/orders/{order_id}/refunds/calculate.json
+Body: {
+  "refund": {
+    "shipping": { "full_refund": true },
+    "refund_line_items": [
+      { "line_item_id": ..., "quantity": ..., "restock_type": "no_restock" }
+    ]
+  }
+}
+
+# 3. Create refund
+POST /admin/api/2024-01/orders/{order_id}/refunds.json
+Body: {
+  "refund": {
+    "notify": true,
+    "note": "Refund via phone — Milo",
+    "refund_line_items": [ { "line_item_id": ..., "quantity": ..., "restock_type": "no_restock" } ],
+    "transactions": [ { "parent_id": ..., "amount": ..., "kind": "refund", "gateway": ... } ]
+  }
+}
+```
 
 **Guards**
 - Blocks if already refunded
 - Blocks if order total is $0 (free kit)
 - Blocks if total > $150 — tells Milo to escalate via `notify_slack`
-- Uses `restock_type: cancel` for unfulfilled orders, `no_restock` for fulfilled
+- Uses `restock_type: no_restock` for all cases (avoids `location_id` requirement)
 
 ---
 
@@ -109,15 +174,22 @@ Flag an order for return by tagging it in Shopify. Team sends the label manually
 | `customer_email` | string | yes |
 | `reason` | string | yes |
 
-**Returns** success confirmation.
+**Endpoints**
+```
+# 1. Fetch order
+GET /admin/api/2024-01/orders.json
+  ?name={order_number}&status=any&fields=id,name
 
-**API** `PUT /orders/{id}.json` (adds note + `return-requested` tag)
+# 2. Tag order
+PUT /admin/api/2024-01/orders/{order_id}.json
+Body: { "order": { "id": ..., "note": "Return requested via phone. Reason: {reason}", "tags": "return-requested" } }
+```
 
 ---
 
 ## Loop Subscription Tools
 
-All Loop tools use the internal Loop subscription ID (7–8 digit integer), never the Shopify subscription ID. The `findSubscription` helper resolves this automatically from the order number.
+All Loop tools resolve the Loop internal subscription ID (7–8 digit integer) automatically from the order number via the `findSubscription` helper. Priority: Shopify order tag → `originOrderShopifyId` → `customerShopifyId` → email lookup.
 
 ---
 
@@ -132,9 +204,19 @@ Read subscription status, next charge date, cadence, and price.
 
 *At least one required.
 
-**Returns** `subscription_status`, `product`, `next_charge_date`, `interval`, `price`, `paused_at`
+**Endpoints (in priority order)**
+```
+# From Shopify order tag "Subscription #shopifyId":
+GET https://api.loopsubscriptions.com/admin/2023-10/subscription/shopify-{shopifySubId}
 
-**API** Loop subscription lookup via order tags → `GET /subscription/shopify-{id}`
+# Fallback 1:
+GET https://api.loopsubscriptions.com/admin/2023-10/subscription?originOrderShopifyId={shopifyOrderId}
+
+# Fallback 2:
+GET https://api.loopsubscriptions.com/admin/2023-10/subscription?customerShopifyId={shopifyCustomerId}
+```
+
+**Returns** `subscription_status`, `product`, `next_charge_date`, `interval`, `price`, `paused_at`
 
 ---
 
@@ -147,9 +229,14 @@ Cancel a Loop subscription.
 | `order_number` | string | yes |
 | `customer_email` | string | no |
 
-**Returns** success confirmation.
-
-**API** `POST /subscription/{loopId}/cancel`
+**Endpoint**
+```
+POST https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/cancel
+Body: {
+  "cancellationReason": "Other",
+  "cancellationComment": "Customer requested cancellation via phone support"
+}
+```
 
 ---
 
@@ -163,9 +250,16 @@ Pause a subscription for 1–3 months.
 | `customer_email` | string | no |
 | `pause_months` | number | no (default: `1`) |
 
-**Returns** success with resume date.
-
-**API** `POST /subscription/{loopId}/pause`
+**Endpoint**
+```
+POST https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/pause
+Body: {
+  "pauseDuration": {
+    "intervalType": "MONTH",
+    "intervalCount": {pause_months}
+  }
+}
+```
 
 ---
 
@@ -178,14 +272,16 @@ Resume a previously paused subscription before the pause period expires.
 | `order_number` | string | yes |
 | `customer_email` | string | no |
 
-**Returns** success confirmation.
-
-**API** `POST /subscription/{loopId}/resume`
+**Endpoint**
+```
+POST https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/resume
+(no body required)
+```
 
 ---
 
 ### `reschedule_delivery`
-Move the next billing/delivery date to a specific date.
+Move the next billing/delivery date to a specific date. Only moves the next order, not all future orders.
 
 **Parameters**
 | Name | Type | Required |
@@ -194,11 +290,16 @@ Move the next billing/delivery date to a specific date.
 | `new_delivery_date` | string | yes (YYYY-MM-DD) |
 | `customer_email` | string | no |
 
-**Returns** success with formatted new date.
+**Endpoint**
+```
+POST https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/reschedule
+Body: {
+  "newBillingDateEpoch": {unix_epoch_seconds},
+  "rescheduleFutureOrders": false
+}
+```
 
-**API** `POST /subscription/{loopId}/reschedule`
-
-**Notes** Converts date to epoch seconds internally. Only reschedules the next order (`rescheduleFutureOrders: false`).
+**Notes** Date is converted from `YYYY-MM-DD` to epoch seconds internally. `rescheduleFutureOrders: false` means only the next order moves.
 
 ---
 
@@ -213,11 +314,17 @@ Change how often the subscription renews (e.g. every 4 weeks → every 8 weeks).
 | `customer_email` | string | no |
 | `interval` | string | no (default: `WEEK`, options: `WEEK` / `MONTH` / `YEAR`) |
 
-**Returns** success with new cadence label.
+**Endpoint**
+```
+PUT https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/frequency
+Body: {
+  "billingPolicy": { "interval": "WEEK", "intervalCount": 8 },
+  "deliveryPolicy": { "interval": "WEEK", "intervalCount": 8 },
+  "discountType": "OLD"
+}
+```
 
-**API** `PUT /subscription/{loopId}/frequency`
-
-**Notes** Uses `discountType: OLD` to preserve existing subscribe-and-save discount.
+**Notes** `discountType: OLD` preserves the existing subscribe-and-save discount.
 
 ---
 
@@ -232,9 +339,21 @@ Apply a manual percentage discount to the next N subscription orders (retention 
 | `orders` | number | no (default: `1`) |
 | `customer_email` | string | no |
 
-**Returns** success confirmation.
+**Endpoint**
+```
+POST https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/discount
+Body: {
+  "manualDiscount": {
+    "title": "Milo retention discount",
+    "type": "PERCENTAGE",
+    "value": 5,
+    "orderLimit": 1,
+    "lineIds": []
+  }
+}
+```
 
-**API** `POST /subscription/{loopId}/discount`
+**Notes** `lineIds: []` applies to the whole contract (not specific lines). `null` is rejected by Loop with a 422.
 
 ---
 
@@ -248,20 +367,30 @@ Swap the subscription to a different bottle count variant (1, 2, or 3 bottles pe
 | `bottles` | number | yes (`1`, `2`, or `3`) |
 | `customer_email` | string | no |
 
-**Returns** success with new bottle count.
+**Endpoints**
+```
+# 1. Find the correct Shopify variant by title
+GET /admin/api/2024-01/products/{productShopifyId}/variants.json
+# Matches variant where title.toLowerCase().includes("{bottles} bottle")
+# Titles: "1 BOTTLE", "2 BOTTLES", "3 BOTTLES"
 
-**API**
-- `GET /products/{productId}/variants.json` (Shopify — find target variant by title)
-- `PUT /subscription/{loopId}/line/{lineId}/swap` (Loop — swap the line)
+# 2. Swap the subscription line
+PUT https://api.loopsubscriptions.com/admin/2023-10/subscription/{loopId}/line/{lineId}/swap
+Body: {
+  "variantShopifyId": {target_variant_id},
+  "quantity": 1,
+  "pricingType": "OLD"
+}
+```
 
-**Notes** Matches variant by title (`"1 BOTTLE"`, `"2 BOTTLES"`, `"3 BOTTLES"`). Uses `pricingType: OLD` to keep existing discount.
+**Notes** `pricingType: OLD` keeps the existing discount. Line ID comes from `subscription.lines[0].id`.
 
 ---
 
 ## Communication Tools
 
 ### `send_portal_link`
-Email the customer their Loop subscription portal link so they can update their payment method.
+Email the customer their subscription portal link so they can update their payment method.
 
 **Parameters**
 | Name | Type | Required |
@@ -269,30 +398,75 @@ Email the customer their Loop subscription portal link so they can update their 
 | `customer_email` | string | yes |
 | `customer_name` | string | no |
 
-**Returns** success confirmation.
+**Endpoint**
+```
+POST https://plantsbasically.gorgias.com/api/tickets
+Body: {
+  "channel": "email",
+  "via": "helpdesk",
+  "from_agent": true,
+  "customer": { "email": ..., "name": ... },
+  "subject": "Your Plants Basically subscription portal",
+  "messages": [{
+    "channel": "email",
+    "public": true,
+    "body_text": "Hi {name}, here's your link: https://www.plantsbasically.com/subscriptions ...",
+    "sender": { "email": GORGIAS_API_EMAIL, "name": "Plants Basically" },
+    "receiver": { "email": customer_email }
+  }]
+}
+```
 
-**API** `POST /api/tickets` (Gorgias — sends outbound email)
-
-**Portal URL** `https://www.plantsbasically.com/subscriptions`
+**Portal URL** `https://www.plantsbasically.com/subscriptions` (redirects to `/a/loop_subscriptions/`)
 
 ---
 
 ### `notify_slack`
-Send a message to the Plants Basically team in Slack. Use for escalations that need immediate human attention.
+Send a message to the Plants Basically team in Slack.
 
 **Parameters**
 | Name | Type | Required |
 |------|------|----------|
-| `message` | string | yes (include customer name, email/phone, order number) |
-| `urgent` | boolean | no (default: `false`) — set `true` to @mention Kyle |
+| `message` | string | yes |
+| `urgent` | boolean | no (default: `false`) |
 
-**Returns** success confirmation.
+**Endpoint**
+```
+POST {SLACK_WEBHOOK_URL}
+Body: { "text": "🚨 *Escalation needed* — @Kyle\n{message}" }   # urgent: true
+Body: { "text": "📞 *Milo voice call note*\n{message}" }         # urgent: false
+```
 
-**Escalate for** refund > $150, chargeback/legal, adverse reaction, "I want a manager", batch quality issue, replacement orders, return labels.
+**Escalate for** refund > $150, chargeback/legal, adverse reaction, "I want a manager", replacement orders, return labels.
 
 ---
 
 ## Auto-logged (not a Milo tool)
 
 ### `logCallToGorgias`
-Called automatically at the end of every call. Creates an internal-note ticket in Gorgias with the full transcript summary and tool results. Milo never calls this directly.
+Called automatically at the end of every call. Creates an internal-note ticket in Gorgias. Milo never calls this directly.
+
+**Endpoint**
+```
+POST https://plantsbasically.gorgias.com/api/tickets
+Body: {
+  "channel": "phone",
+  "via": "helpdesk",
+  "from_agent": true,
+  "customer": { "email": ..., "name": ... },
+  "subject": "Milo call — {date}",
+  "tags": [{ "name": "voice-call" }],
+  "messages": [{
+    "channel": "internal-note",
+    "public": false,
+    "body_text": "{transcript summary + tool results}",
+    "sender": { "email": GORGIAS_API_EMAIL, "name": "Milo" }
+  }]
+}
+```
+
+---
+
+## No Draft Orders Tool
+
+There is currently no draft order tool. Replacement orders (damaged package, wrong address after shipping) are handled by escalating to Slack (`notify_slack`, `urgent: true`) so the team creates them manually.
