@@ -346,12 +346,11 @@ export async function process_refund({ order_number, customer_email }) {
     if (o.financial_status === 'refunded') return { message: `Order ${order_number} has already been refunded.` };
     if (Number(o.total_price) > 150) return { success: false, message: `Order ${order_number} total is $${o.total_price} — over the $150 limit. Escalate to the team via notify_slack.` };
 
-    // no_restock for fulfilled orders (we don't require returns); cancel for unfulfilled (restores inventory)
-    const fulfilled = o.fulfillment_status === 'fulfilled';
+    // no_restock for all cases — cancel requires a location_id which varies by store config
     const refundLineItems = (o.line_items || []).map(item => ({
       line_item_id: item.id,
       quantity: item.quantity,
-      restock_type: fulfilled ? 'no_restock' : 'cancel',
+      restock_type: 'no_restock',
     }));
 
     const calcData = await shopify(`orders/${o.id}/refunds/calculate.json`, {
