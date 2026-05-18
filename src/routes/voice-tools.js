@@ -486,7 +486,7 @@ export async function apply_discount({ order_number, customer_email, percent = 5
           type: 'PERCENTAGE',
           value: Number(percent),
           orderLimit: Number(orders),
-          lineIds: null,
+          lineIds: [],
         },
       }),
     });
