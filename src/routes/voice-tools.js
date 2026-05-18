@@ -312,22 +312,32 @@ export async function initiate_return({ order_number, customer_email, reason }) 
 export async function process_refund({ order_number, customer_email }) {
   try {
     const data = await shopify(
-      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,total_price,financial_status`
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,total_price,financial_status,fulfillment_status,line_items`
     );
     if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found` };
     const o = data.orders[0];
     if (Number(o.total_price) === 0) return { message: `Order ${order_number} was a free welcome kit — no refund needed.` };
     if (o.financial_status === 'refunded') return { message: `Order ${order_number} has already been refunded.` };
+    if (Number(o.total_price) > 150) return { success: false, message: `Order ${order_number} total is $${o.total_price} — over the $150 limit. Escalate to the team via notify_slack.` };
+
+    // no_restock for fulfilled orders (we don't require returns); cancel for unfulfilled (restores inventory)
+    const fulfilled = o.fulfillment_status === 'fulfilled';
+    const refundLineItems = (o.line_items || []).map(item => ({
+      line_item_id: item.id,
+      quantity: item.quantity,
+      restock_type: fulfilled ? 'no_restock' : 'cancel',
+    }));
+
     const calcData = await shopify(`orders/${o.id}/refunds/calculate.json`, {
       method: 'POST',
-      body: JSON.stringify({ refund: { shipping: { full_refund: true }, refund_line_items: [] } }),
+      body: JSON.stringify({ refund: { shipping: { full_refund: true }, refund_line_items: refundLineItems } }),
     });
     const transactions = calcData.refund?.transactions?.map(t => ({
       parent_id: t.parent_id, amount: t.amount, kind: 'refund', gateway: t.gateway,
     }));
     await shopify(`orders/${o.id}/refunds.json`, {
       method: 'POST',
-      body: JSON.stringify({ refund: { notify: true, note: 'Refund via phone — Milo', transactions } }),
+      body: JSON.stringify({ refund: { notify: true, note: 'Refund via phone — Milo', refund_line_items: refundLineItems, transactions } }),
     });
     return { success: true, message: `Refund of $${o.total_price} processed for order ${order_number}. Confirmation email sent.` };
   } catch (err) {
@@ -426,6 +436,45 @@ export async function cancel_order({ order_number, customer_email }) {
   }
 }
 
+export async function update_order_address({ order_number, address1, address2 = '', city, province, zip, country_code = 'US' }) {
+  try {
+    const data = await shopify(
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,fulfillment_status,shipping_address,customer`
+    );
+    if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found.` };
+    const o = data.orders[0];
+    if (o.fulfillment_status === 'fulfilled') {
+      return { success: false, message: `Order ${order_number} has already shipped — address cannot be changed. Notify the team to arrange a replacement to the correct address.` };
+    }
+    const existing = o.shipping_address || {};
+    const firstName = existing.first_name || o.customer?.first_name || '';
+    const lastName = existing.last_name || o.customer?.last_name || '';
+    await shopify(`orders/${o.id}.json`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        order: {
+          id: o.id,
+          shipping_address: {
+            first_name: firstName,
+            last_name: lastName,
+            address1,
+            address2,
+            city,
+            province,
+            zip,
+            country_code,
+          },
+        },
+      }),
+    });
+    const formatted = [address1, address2, city, province, zip].filter(Boolean).join(', ');
+    return { success: true, message: `Shipping address on order ${order_number} updated to: ${formatted}.` };
+  } catch (err) {
+    console.error('[tool] update_order_address:', err.message);
+    return { error: err.message };
+  }
+}
+
 export async function apply_discount({ order_number, customer_email, percent = 5, orders = 1 }) {
   try {
     const { loopId, customerName } = await findSubscription(order_number, customer_email);
@@ -452,7 +501,8 @@ export async function apply_discount({ order_number, customer_email, percent = 5
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund, cancel_order, apply_discount, notify_slack,
+  initiate_return, process_refund, cancel_order, apply_discount,
+  update_order_address, notify_slack,
 };
 
 export async function runTool(name, args) {

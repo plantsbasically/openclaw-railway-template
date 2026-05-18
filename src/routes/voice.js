@@ -96,6 +96,23 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email" } }, required: ['order_number'] }
     },
     {
+      type: 'function', name: 'update_order_address',
+      description: 'Update the shipping address on an unshipped order. Always read the full address back to the customer and confirm before calling. If the order has already shipped, this will return an error — use notify_slack instead.',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_number: { type: 'string', description: 'Order number (with or without #)' },
+          address1: { type: 'string', description: 'Street address or PO Box (e.g. "PO Box 3614" or "123 Main St")' },
+          address2: { type: 'string', description: 'Apt, suite, unit (optional)' },
+          city: { type: 'string', description: 'City' },
+          province: { type: 'string', description: 'State or province name (e.g. "California")' },
+          zip: { type: 'string', description: 'ZIP or postal code' },
+          country_code: { type: 'string', description: 'Two-letter country code. Default: US' }
+        },
+        required: ['order_number', 'address1', 'city', 'province', 'zip']
+      }
+    },
+    {
       type: 'function', name: 'notify_slack',
       description: 'Send a message to the Plants Basically team in Slack. Use for escalations that need immediate human attention.',
       parameters: {
