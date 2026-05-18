@@ -62,6 +62,20 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New billing date in YYYY-MM-DD format, e.g. '2026-08-01'. Confirm the date with the customer before calling." } }, required: ['order_number', 'new_delivery_date'] }
     },
     {
+      type: 'function', name: 'update_subscription_frequency',
+      description: 'Change how often a subscription renews. Use for retention — offer every 8 weeks before cancelling. Confirm the new cadence with the customer before calling.',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_number: { type: 'string', description: 'Order number' },
+          customer_email: { type: 'string', description: 'Customer email (fallback)' },
+          interval_count: { type: 'number', description: 'Number of intervals, e.g. 8 for every 8 weeks' },
+          interval: { type: 'string', description: 'WEEK, MONTH, or YEAR. Default: WEEK', enum: ['WEEK', 'MONTH', 'YEAR'] },
+        },
+        required: ['order_number', 'interval_count']
+      }
+    },
+    {
       type: 'function', name: 'cancel_subscription',
       description: "Cancel a subscription. Use order_number — never ask the customer for a subscription ID. Always attempt retention first (offer pause or skip).",
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" } }, required: ['order_number'] }

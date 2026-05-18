@@ -527,6 +527,28 @@ export async function update_order_address({ order_number, address1, address2 = 
   }
 }
 
+export async function update_subscription_frequency({ order_number, customer_email, interval_count, interval = 'WEEK' }) {
+  try {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    const count = Number(interval_count);
+    const policy = { interval: interval.toUpperCase(), intervalCount: count };
+    const result = await loop(`/subscription/${loopId}/frequency`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        billingPolicy: policy,
+        deliveryPolicy: policy,
+        discountType: 'OLD',
+      }),
+    });
+    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the frequency update.' };
+    const label = `every ${count} ${interval.toLowerCase()}${count > 1 ? 's' : ''}`;
+    return { success: true, message: `Subscription updated to ${label} for ${customerName}.` };
+  } catch (err) {
+    console.error('[tool] update_subscription_frequency:', err.message);
+    return { error: err.message };
+  }
+}
+
 export async function apply_discount({ order_number, customer_email, percent = 5, orders = 1 }) {
   try {
     const { loopId, customerName } = await findSubscription(order_number, customer_email);
@@ -553,7 +575,7 @@ export async function apply_discount({ order_number, customer_email, percent = 5
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, reschedule_delivery,
-  initiate_return, process_refund, cancel_order, apply_discount,
+  initiate_return, process_refund, cancel_order, apply_discount, update_subscription_frequency,
   update_order_address, notify_slack,
 };
 
