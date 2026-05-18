@@ -572,11 +572,55 @@ export async function apply_discount({ order_number, customer_email, percent = 5
   }
 }
 
+export async function resume_subscription({ order_number, customer_email }) {
+  try {
+    const { loopId, customerName } = await findSubscription(order_number, customer_email);
+    const result = await loop(`/subscription/${loopId}/resume`, { method: 'POST' });
+    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the resume.' };
+    return { success: true, message: `Subscription resumed for ${customerName}. Billing will restart on the original schedule.` };
+  } catch (err) {
+    console.error('[tool] resume_subscription:', err.message);
+    return { error: err.message };
+  }
+}
+
+export async function change_subscription_bottles({ order_number, customer_email, bottles }) {
+  try {
+    const count = Number(bottles);
+    if (![1, 2, 3].includes(count)) return { error: 'bottles must be 1, 2, or 3.' };
+
+    const { loopId, customerName, subscription } = await findSubscription(order_number, customer_email);
+    const line = subscription.lines?.[0];
+    if (!line) return { error: 'No line items found on subscription.' };
+
+    const lineId = line.id;
+    const productId = line.productShopifyId;
+    if (!productId) return { error: 'Could not determine product from subscription line.' };
+
+    // Find the variant whose title matches the requested bottle count
+    const variantsData = await shopify(`products/${productId}/variants.json`);
+    const target = variantsData.variants?.find(v =>
+      (v.title || '').toLowerCase().includes(`${count} bottle`)
+    );
+    if (!target) return { error: `No ${count}-bottle variant found for this product.` };
+
+    const result = await loop(`/subscription/${loopId}/line/${lineId}/swap`, {
+      method: 'PUT',
+      body: JSON.stringify({ variantShopifyId: target.id, quantity: 1, pricingType: 'OLD' }),
+    });
+    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the swap.' };
+    return { success: true, message: `Subscription updated to ${count} bottle${count > 1 ? 's' : ''} per delivery for ${customerName}.` };
+  } catch (err) {
+    console.error('[tool] change_subscription_bottles:', err.message);
+    return { error: err.message };
+  }
+}
+
 const TOOLS = {
   lookup_account, get_order_status, get_subscription_details,
-  cancel_subscription, pause_subscription, reschedule_delivery,
+  cancel_subscription, pause_subscription, resume_subscription, reschedule_delivery,
   initiate_return, process_refund, cancel_order, apply_discount, update_subscription_frequency,
-  update_order_address, notify_slack,
+  change_subscription_bottles, update_order_address, notify_slack,
 };
 
 export async function runTool(name, args) {

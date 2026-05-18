@@ -62,6 +62,31 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New billing date in YYYY-MM-DD format, e.g. '2026-08-01'. Confirm the date with the customer before calling." } }, required: ['order_number', 'new_delivery_date'] }
     },
     {
+      type: 'function', name: 'resume_subscription',
+      description: 'Resume a paused subscription early. Use when a customer paused but wants to restart before the pause period ends.',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_number: { type: 'string', description: 'Order number' },
+          customer_email: { type: 'string', description: 'Customer email (fallback)' },
+        },
+        required: ['order_number']
+      }
+    },
+    {
+      type: 'function', name: 'change_subscription_bottles',
+      description: 'Change how many bottles the customer receives per subscription delivery by swapping to the 1, 2, or 3 bottle variant. Use when a customer says they want more or fewer bottles.',
+      parameters: {
+        type: 'object',
+        properties: {
+          order_number: { type: 'string', description: 'Order number' },
+          customer_email: { type: 'string', description: 'Customer email (fallback)' },
+          bottles: { type: 'number', description: 'Number of bottles per delivery: 1, 2, or 3', enum: [1, 2, 3] },
+        },
+        required: ['order_number', 'bottles']
+      }
+    },
+    {
       type: 'function', name: 'update_subscription_frequency',
       description: 'Change how often a subscription renews. Use for retention — offer every 8 weeks before cancelling. Confirm the new cadence with the customer before calling.',
       parameters: {
