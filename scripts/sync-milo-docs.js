@@ -4,7 +4,8 @@ import path from 'path';
 import fetch from 'node-fetch';
 import FormData from 'form-data';
 
-const DOCS_DIR = '/data/workspace/agents/milo';
+const VOLUME_DOCS_DIR = '/data/workspace/agents/milo';
+const REPO_DOCS_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'docs', 'milo');
 const COLLECTION_NAME = 'Milo Knowledge Base';
 
 const XAI_API_KEY = process.env.XAI_API_KEY;
@@ -21,14 +22,20 @@ async function main() {
   let collectionId = await getOrCreateCollection();
   console.log(`✅ Using collection: ${COLLECTION_NAME} (${collectionId})`);
 
-  const mdFiles = fs.readdirSync(DOCS_DIR)
-    .filter(file => file.toLowerCase().endsWith('.md'))
-    .map(file => ({
-      name: file,
-      path: path.join(DOCS_DIR, file)
-    }));
+  const readDir = (dir) => {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir)
+      .filter(file => file.toLowerCase().endsWith('.md'))
+      .map(file => ({ name: file, path: path.join(dir, file) }));
+  };
 
-  console.log(`📁 Found ${mdFiles.length} markdown files`);
+  const volumeFiles = readDir(VOLUME_DOCS_DIR);
+  const repoFiles = readDir(REPO_DOCS_DIR);
+  // Repo files take precedence — dedupe by filename
+  const seen = new Set(repoFiles.map(f => f.name));
+  const mdFiles = [...repoFiles, ...volumeFiles.filter(f => !seen.has(f.name))];
+
+  console.log(`📁 Found ${mdFiles.length} markdown files (${repoFiles.length} from repo, ${volumeFiles.length - (volumeFiles.length - mdFiles.length + repoFiles.length)} from volume)`);
 
   for (const file of mdFiles) {
     console.log(`Uploading ${file.name}...`);
