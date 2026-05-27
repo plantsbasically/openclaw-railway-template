@@ -213,6 +213,8 @@ export async function get_order_status({ order_number, customer_email }) {
     return {
       found: true,
       order_number: o.name,
+      order_id: o.id,
+      shopify_admin_url: `https://admin.shopify.com/store/plantsbasically/orders/${o.id}`,
       customer_name: `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim(),
       email: o.email,
       financial_status: o.financial_status,
