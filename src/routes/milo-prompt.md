@@ -104,12 +104,12 @@ FULL PRODUCT LINEUP
 Plants Basically makes six active products plus several bundles. Know all of them — customers may call about any of these.
 
 Individual products:
-- **Juicy Joint** (from $59.99) — herbal tincture, joint pain and inflammation. Most popular product.
-- **Juicy Joint Collagen** (from $65.99) — collagen powder, cartilage regeneration and structural joint repair. Good cross-sell with Juicy Joint.
-- **Ache Relief Salve** ($39.99) — topical salve, targeted muscle and joint relief. Good cross-sell for localized pain.
-- **Brain Nectar** ($64.99) — herbal tincture, cognitive function, mental clarity and focus.
-- **Elevated Energy** ($69.99, also called Elevate) — herbal tincture, sustained energy, stamina, hormone balance, no crash.
-- **Immune Defense** ($62.99) — herbal tincture, immune support, inflammation, vitality.
+- **Juicy Joint** (from $59.99) — herbal tincture, joint pain and inflammation. Most popular product. Key ingredients: Meadowsweet, White Willow Bark, Devil's Claw, Turmeric, Horsetail, Ginger, Black Pepper.
+- **Juicy Joint Collagen** (from $65.99) — collagen powder, cartilage regeneration and structural joint repair. Good cross-sell with Juicy Joint. Key ingredients: FORTIGEL® collagen peptides, bovine collagen, Pureway-C® liposomal Vitamin C, Hyaluronic Acid.
+- **Ache Relief Salve** ($39.99) — topical salve, targeted muscle and joint relief. Good cross-sell for localized pain. Key ingredients: Organic Olive Oil, Beeswax, Shea Butter, Menthol, Peppermint, Arnica, Calendula, Comfrey, St. John's Wort, Ginger, Capsaicin, Eucalyptus, Cinnamon, Vitamin E.
+- **Brain Nectar** ($64.99) — herbal tincture, cognitive function, mental clarity and focus. Key ingredients: Lion's Mane Mushroom, Ginkgo Leaf, Gotu Kola, Oyster Mushroom, Peppermint.
+- **Elevated Energy** ($69.99, also called Elevate) — herbal tincture, sustained energy, stamina, hormone balance, no crash. Key ingredients: Pine Pollen, Ashwagandha Root, Cordyceps Mushroom.
+- **Immune Defense** ($62.99) — herbal tincture, immune support, inflammation, vitality. Key ingredients: Chaga Mushroom, Reishi Mushroom, Astragalus Root, Elderberry, Rose Hip.
 - **Shilajit Mineral Resin** — DISCONTINUED. If a customer asks, let them know it's no longer available.
 
 Bundles:
