@@ -421,25 +421,112 @@ export async function notify_slack({ message, urgent = false }) {
   }
 }
 
+// Consolidate streaming transcript — consecutive same-role turns get merged,
+// keeping the last (most complete) text in each group.
+function consolidateTranscript(transcript) {
+  const out = [];
+  for (const turn of transcript || []) {
+    const last = out[out.length - 1];
+    if (last && last.role === turn.role) {
+      last.text = turn.text;
+    } else {
+      out.push({ ...turn });
+    }
+  }
+  return out;
+}
+
 // Auto-called at end of every call from voice.js — not a Milo tool
 export async function logCallToGorgias(log) {
   try {
     if (!GORGIAS_DOMAIN || !GORGIAS_EMAIL || !GORGIAS_KEY) return;
 
-    let customerEmail, customerName;
+    // Extract customer info from tool results
+    let customerEmail, customerName, orderNumber, adminUrl;
     for (const t of log.tools_used || []) {
-      if (t.result?.email) { customerEmail = t.result.email; customerName = t.result.customer_name || t.result.name; break; }
-      if (t.args?.customer_email) { customerEmail = t.args.customer_email; break; }
+      if (t.result?.email && !customerEmail) {
+        customerEmail = t.result.email;
+        customerName = t.result.customer_name || t.result.name;
+      }
+      if (t.args?.customer_email && !customerEmail) customerEmail = t.args.customer_email;
+      if (t.result?.order_number && !orderNumber) orderNumber = t.result.order_number;
+      if (t.result?.shopify_admin_url && !adminUrl) adminUrl = t.result.shopify_admin_url;
     }
 
-    // Fall back to caller phone or a placeholder so every call gets logged
     const callerIdentifier = customerEmail || log.caller_phone || 'unknown@voice.call';
     const callerLabel = customerName || log.caller_phone || 'Unknown caller';
 
-    const toolLines = (log.tools_used || [])
-      .map(t => `• ${t.name}: ${JSON.stringify(t.result)?.substring(0, 300)}`)
-      .join('\n') || 'No tools used';
-    const summary = `Milo voice call — ${log.duration_seconds}s, ${log.transcript?.length || 0} turns\n\nActions:\n${toolLines}\n\nCall ID: ${log.call_id}`;
+    // Clean up transcript — dedupe streaming partials
+    const turns = consolidateTranscript(log.transcript);
+
+    // First complete caller message = reason for call
+    const firstCallerText = turns.find(t => t.role === 'caller')?.text || '(not captured)';
+    // Last Milo message = how the call was left
+    const lastMiloText = [...turns].reverse().find(t => t.role === 'milo')?.text || '(not captured)';
+
+    // Plain-English action labels
+    const TOOL_LABELS = {
+      lookup_account: 'Verified customer account',
+      get_order_status: 'Pulled up order',
+      get_subscription_details: 'Checked subscription',
+      cancel_subscription: 'Cancelled subscription',
+      pause_subscription: 'Paused subscription',
+      resume_subscription: 'Resumed subscription',
+      reschedule_delivery: 'Rescheduled delivery',
+      update_subscription_frequency: 'Changed subscription frequency',
+      change_subscription_bottles: 'Changed bottle quantity',
+      cancel_order: 'Cancelled order',
+      update_order_address: 'Updated shipping address',
+      initiate_return: 'Initiated return',
+      process_refund: 'Processed refund',
+      apply_discount: 'Applied retention discount',
+      notify_slack: '🚨 Escalated to team via Slack',
+      send_portal_link: 'Sent subscription portal link',
+    };
+
+    const actionLines = (log.tools_used || []).map(t => {
+      const label = TOOL_LABELS[t.name] || t.name;
+      if (t.result?.found === false) return `• ${label} — not found: ${t.result.message || ''}`;
+      if (t.result?.success === false) return `• ${label} — failed: ${t.result.message || ''}`;
+      if (t.result?.message) return `• ${label} — ${t.result.message}`;
+      if (t.result?.order_number) return `• ${label} — Order ${t.result.order_number} (${t.result.fulfillment_status || 'unknown status'}, ${t.result.total || ''})`;
+      return `• ${label}`;
+    }).join('\n') || '• No actions taken';
+
+    const minutes = Math.floor(log.duration_seconds / 60);
+    const seconds = log.duration_seconds % 60;
+    const duration = `${minutes}m ${seconds}s`;
+
+    const subject = orderNumber
+      ? `Milo call — ${callerLabel} — Order ${orderNumber}`
+      : `Milo call — ${callerLabel}`;
+
+    const transcriptText = turns
+      .map(t => `${t.role === 'milo' ? 'Milo' : 'Customer'}: ${t.text}`)
+      .join('\n');
+
+    const body = [
+      'CUSTOMER',
+      `Name: ${callerLabel}`,
+      `Email: ${customerEmail || 'not collected'}`,
+      `Phone: ${log.caller_phone || 'not collected'}`,
+      adminUrl ? `Order: ${adminUrl}` : '',
+      '',
+      'REASON FOR CALL',
+      firstCallerText,
+      '',
+      'WHAT MILO DID',
+      actionLines,
+      '',
+      'HOW IT WAS LEFT',
+      lastMiloText,
+      '',
+      '---',
+      `Duration: ${duration}  ·  Call ID: ${log.call_id}`,
+      '',
+      'FULL TRANSCRIPT',
+      transcriptText,
+    ].filter(l => l !== undefined).join('\n');
 
     // messages is required (minItems:1) per Gorgias API spec — must be included in creation
     const ticket = await gorgias('/api/tickets', {
@@ -449,14 +536,14 @@ export async function logCallToGorgias(log) {
         via: 'helpdesk',
         from_agent: true,
         customer: { email: callerIdentifier, name: callerLabel },
-        subject: `Milo call — ${new Date(log.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+        subject,
         tags: [{ name: 'voice-call' }],
         messages: [{
           channel: 'internal-note',
           via: 'helpdesk',
           from_agent: true,
           public: false,
-          body_text: summary,
+          body_text: body,
           sender: { email: GORGIAS_EMAIL, name: 'Milo' },
         }],
       }),
