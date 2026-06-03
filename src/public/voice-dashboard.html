@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Milo — Call Logs</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f3; color: #1a1a1a; }
+
+    .header { background: #fff; border-bottom: 1px solid #e5e5e5; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    .header h1 { font-size: 18px; font-weight: 600; }
+    .header .subtitle { font-size: 13px; color: #666; margin-left: auto; }
+
+    .container { max-width: 900px; margin: 0 auto; padding: 24px 16px; }
+
+    .call-card { background: #fff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; cursor: pointer; transition: border-color 0.15s; }
+    .call-card:hover { border-color: #bbb; }
+    .call-card.active { border-color: #1a1a1a; }
+
+    .call-header { display: flex; align-items: flex-start; gap: 12px; }
+    .call-meta { flex: 1; }
+    .call-name { font-size: 15px; font-weight: 600; }
+    .call-reason { font-size: 13px; color: #444; margin-top: 3px; }
+    .call-info { font-size: 12px; color: #888; margin-top: 4px; }
+
+    .call-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .btn-callback { background: #1a1a1a; color: #fff; border: none; border-radius: 6px; padding: 7px 14px; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-callback:hover { background: #333; }
+    .btn-callback.no-phone { background: #e5e5e5; color: #888; cursor: default; pointer-events: none; }
+    .hint { font-size: 11px; color: #999; max-width: 180px; text-align: right; line-height: 1.4; }
+
+    .call-detail { display: none; margin-top: 16px; border-top: 1px solid #f0f0f0; padding-top: 16px; }
+    .call-card.active .call-detail { display: block; }
+
+    .section-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 6px; margin-top: 14px; }
+    .section-label:first-child { margin-top: 0; }
+    .section-value { font-size: 13px; color: #222; line-height: 1.6; white-space: pre-wrap; }
+
+    .tools-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .tool-chip { font-size: 11px; background: #f0f0f0; border-radius: 4px; padding: 3px 8px; color: #444; }
+    .tool-chip.failed { background: #fff0f0; color: #c00; }
+
+    .transcript { font-size: 13px; line-height: 1.7; color: #333; }
+    .transcript .milo { color: #555; }
+    .transcript .milo strong { color: #1a1a1a; font-weight: 600; }
+    .transcript .caller strong { color: #2563eb; font-weight: 600; }
+
+    .empty { text-align: center; padding: 60px 20px; color: #888; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: #fff; border-radius: 12px; padding: 24px; width: 360px; max-width: 90vw; }
+    .modal h2 { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .modal p { font-size: 13px; color: #555; margin-bottom: 16px; line-height: 1.5; }
+    .modal input { width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 10px 12px; font-size: 14px; margin-bottom: 8px; }
+    .modal input:focus { outline: none; border-color: #1a1a1a; }
+    .modal-hint { font-size: 11px; color: #888; margin-bottom: 16px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .btn-cancel { background: none; border: 1px solid #ddd; border-radius: 6px; padding: 8px 16px; font-size: 13px; cursor: pointer; }
+    .btn-call { background: #1a1a1a; color: #fff; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .btn-call:hover { background: #333; }
+    .btn-call:disabled { background: #ccc; cursor: default; }
+
+    .toast { position: fixed; bottom: 24px; right: 24px; background: #1a1a1a; color: #fff; padding: 12px 18px; border-radius: 8px; font-size: 13px; z-index: 200; display: none; }
+    .toast.show { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <span style="font-size:20px">📞</span>
+  <h1>Milo — Call Logs</h1>
+  <span class="subtitle" id="subtitle">Loading...</span>
+</div>
+
+<div class="container" id="calls-container">
+  <div class="empty">Loading calls...</div>
+</div>
+
+<!-- Call Back Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h2>📞 Call Back</h2>
+    <p>Twilio will call <strong>your phone</strong> first. Pick up and you'll be connected to the customer. The customer sees <strong>(888) 868-2205</strong> on their screen.</p>
+    <input type="tel" id="agent-number" placeholder="Your phone number (e.g. +12155551234)" />
+    <div class="modal-hint">Saved to this browser — you won't need to re-enter it.</div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-call" id="btn-call" onclick="triggerCall()">Call Me First</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  let pendingCustomerPhone = null;
+
+  // Load saved agent number
+  const agentInput = document.getElementById('agent-number');
+  agentInput.value = localStorage.getItem('agent_phone') || '';
+
+  async function loadCalls() {
+    const res = await fetch('/voice/logs', { credentials: 'include' });
+    if (res.status === 401) { window.location.href = '/voice/logs'; return; }
+    const data = await res.json();
+    const calls = data.calls || [];
+    document.getElementById('subtitle').textContent = `${calls.length} recent calls`;
+    const container = document.getElementById('calls-container');
+    if (!calls.length) { container.innerHTML = '<div class="empty">No calls yet.</div>'; return; }
+    container.innerHTML = calls.map(c => renderCard(c)).join('');
+  }
+
+  function renderCard(c) {
+    const date = new Date(c.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const dur = c.duration_seconds ? `${Math.floor(c.duration_seconds/60)}m ${c.duration_seconds%60}s` : '';
+    const phone = c.caller_phone || '';
+    const hasPhone = !!phone;
+    const callbackBtn = hasPhone
+      ? `<button class="btn-callback" onclick="event.stopPropagation();openModal('${phone}')">📞 Call Back</button>
+         <div class="hint">We'll call your phone first, then connect you to the customer</div>`
+      : `<button class="btn-callback no-phone" title="No phone number on file">No phone</button>`;
+
+    return `<div class="call-card" onclick="toggleDetail('${c.call_id}')">
+      <div class="call-header">
+        <div class="call-meta">
+          <div class="call-name" id="name-${c.call_id}">Loading...</div>
+          <div class="call-reason">${c.preview || ''}</div>
+          <div class="call-info">${date} · ${dur} · ${c.turns} turns · ${(c.tools_used||[]).join(', ')}</div>
+        </div>
+        <div class="call-actions">${callbackBtn}</div>
+      </div>
+      <div class="call-detail" id="detail-${c.call_id}">
+        <div style="color:#888;font-size:13px">Click to load transcript...</div>
+      </div>
+    </div>`;
+  }
+
+  async function toggleDetail(callId) {
+    const card = document.querySelector(`[onclick="toggleDetail('${callId}')"]`);
+    const detail = document.getElementById(`detail-${callId}`);
+    const wasActive = card.classList.contains('active');
+    document.querySelectorAll('.call-card').forEach(c => c.classList.remove('active'));
+    if (wasActive) return;
+    card.classList.add('active');
+    if (detail.dataset.loaded) return;
+    detail.dataset.loaded = '1';
+    detail.innerHTML = '<div style="color:#888;font-size:13px">Loading...</div>';
+
+    const res = await fetch(`/voice/logs?id=${callId}`, { credentials: 'include' });
+    const log = await res.json();
+
+    // Extract customer info from tools
+    let name = 'Unknown caller', email = '', phone = '';
+    for (const t of log.tools_used || []) {
+      if (t.result?.name) { name = t.result.name; email = t.result.email || ''; break; }
+      if (t.result?.customer_name) { name = t.result.customer_name; email = t.result.email || ''; break; }
+    }
+    for (const t of log.tools_used || []) {
+      if (t.result?.order_number) { phone = log.caller_phone || ''; break; }
+    }
+    document.getElementById(`name-${callId}`).textContent = name || 'Unknown caller';
+
+    // Consolidate streaming transcript
+    const turns = [];
+    for (const t of log.transcript || []) {
+      const last = turns[turns.length - 1];
+      if (last && last.role === t.role) last.text = t.text;
+      else turns.push({ ...t });
+    }
+
+    const transcriptHtml = turns.map(t =>
+      t.role === 'milo'
+        ? `<div class="milo"><strong>Milo:</strong> ${t.text}</div>`
+        : `<div class="caller"><strong>Customer:</strong> ${t.text}</div>`
+    ).join('');
+
+    const toolsHtml = (log.tools_used || []).map(t => {
+      const failed = t.result?.found === false || t.result?.success === false || t.result?.error;
+      return `<span class="tool-chip${failed ? ' failed' : ''}">${t.name}</span>`;
+    }).join('');
+
+    const adminLinks = (log.tools_used || [])
+      .filter(t => t.result?.shopify_admin_url)
+      .map(t => `<a href="${t.result.shopify_admin_url}" target="_blank" style="font-size:13px;color:#2563eb">${t.result.order_number} ↗</a>`)
+      .join('  ');
+
+    detail.innerHTML = `
+      ${email ? `<div class="section-label">Customer</div><div class="section-value">${name}${email ? ' · ' + email : ''}${log.caller_phone ? ' · ' + log.caller_phone : ''}</div>` : ''}
+      ${adminLinks ? `<div class="section-label">Order</div><div class="section-value">${adminLinks}</div>` : ''}
+      <div class="section-label">Tools Used</div>
+      <div class="tools-list">${toolsHtml || '<span style="color:#888;font-size:13px">None</span>'}</div>
+      <div class="section-label">Transcript</div>
+      <div class="transcript">${transcriptHtml}</div>
+      <div style="font-size:11px;color:#ccc;margin-top:12px">Call ID: ${log.call_id}</div>
+    `;
+  }
+
+  function openModal(customerPhone) {
+    pendingCustomerPhone = customerPhone;
+    document.getElementById('modal').classList.add('open');
+    agentInput.focus();
+  }
+
+  function closeModal() {
+    document.getElementById('modal').classList.remove('open');
+    pendingCustomerPhone = null;
+  }
+
+  async function triggerCall() {
+    const agent = agentInput.value.trim();
+    if (!agent) { agentInput.focus(); return; }
+    localStorage.setItem('agent_phone', agent);
+
+    const btn = document.getElementById('btn-call');
+    btn.disabled = true;
+    btn.textContent = 'Calling...';
+
+    try {
+      const res = await fetch('/voice/dial', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: pendingCustomerPhone, agent }),
+      });
+      const data = await res.json();
+      closeModal();
+      showToast(data.message || 'Call initiated — check your phone.');
+    } catch (e) {
+      showToast('Something went wrong — try again.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Call Me First';
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 4000);
+  }
+
+  // Allow enter key in modal
+  agentInput.addEventListener('keydown', e => { if (e.key === 'Enter') triggerCall(); });
+  document.getElementById('modal').addEventListener('click', e => { if (e.target === document.getElementById('modal')) closeModal(); });
+
+  loadCalls();
+</script>
+</body>
+</html>

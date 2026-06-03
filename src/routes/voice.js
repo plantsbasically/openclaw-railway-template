@@ -265,6 +265,11 @@ export function setupVoiceHttpRoutes() {
 </Response>`);
   });
 
+  // GET /voice/dashboard — call log UI
+  router.get('/dashboard', requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/voice-dashboard.html'));
+  });
+
   // GET /voice/logs — view recent call transcripts (password protected)
   router.get('/logs', requireAuth, (req, res) => {
 
