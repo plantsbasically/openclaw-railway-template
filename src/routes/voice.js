@@ -42,6 +42,11 @@ const SESSION_CONFIG = {
       parameters: { type: 'object', properties: { email: { type: 'string', description: "Customer's email address" }, phone: { type: 'string', description: "Customer's phone number (optional for verification)" } }, required: ['email'] }
     },
     {
+      type: 'function', name: 'lookup_by_name',
+      description: "Search for a customer by first and last name. Use when the customer can't provide an email or order number, or when email lookup returns an account with no orders. May return multiple matches — read them back to the customer to confirm which is theirs.",
+      parameters: { type: 'object', properties: { first_name: { type: 'string', description: "Customer's first name" }, last_name: { type: 'string', description: "Customer's last name" } }, required: ['first_name', 'last_name'] }
+    },
+    {
       type: 'function', name: 'get_order_status',
       description: 'Get order details, status, shipment tracking, and delivery info. Email is optional — order number alone is enough.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'The order number (with or without #)' }, customer_email: { type: 'string', description: "Customer's email (optional — only needed if order number is ambiguous)" } }, required: ['order_number'] }

@@ -201,6 +201,52 @@ export async function lookup_account({ email }) {
   }
 }
 
+export async function lookup_by_name({ first_name, last_name }) {
+  try {
+    const query = `first_name:${first_name} last_name:${last_name}`;
+    const data = await shopify(
+      `customers/search.json?query=${encodeURIComponent(query)}&fields=id,email,first_name,last_name,phone,orders_count`
+    );
+    if (!data.customers?.length) return { found: false, message: `No customers found named ${first_name} ${last_name}.` };
+
+    // For any customer with orders, fetch their most recent order
+    const results = await Promise.all(data.customers.map(async (c) => {
+      let recent_order = null;
+      if (c.orders_count > 0) {
+        try {
+          const orders = await shopify(
+            `orders.json?customer_id=${c.id}&status=any&limit=1&fields=id,name,created_at,total_price,financial_status,fulfillment_status`
+          );
+          const o = orders.orders?.[0];
+          if (o) {
+            recent_order = {
+              order_number: o.name,
+              date: new Date(o.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+              total: `$${o.total_price}`,
+              financial_status: o.financial_status,
+              fulfillment_status: o.fulfillment_status || 'not yet shipped',
+            };
+          }
+        } catch (e) {
+          console.warn('[lookup_by_name] order fetch failed for', c.id, e.message);
+        }
+      }
+      return {
+        name: `${c.first_name} ${c.last_name}`.trim(),
+        email: c.email,
+        phone: c.phone || null,
+        orders_count: c.orders_count,
+        recent_order,
+      };
+    }));
+
+    return { found: true, matches: results };
+  } catch (err) {
+    console.error('[tool] lookup_by_name:', err.message);
+    return { error: err.message };
+  }
+}
+
 export async function get_order_status({ order_number, customer_email }) {
   try {
     const query = customer_email
@@ -735,7 +781,7 @@ export async function change_subscription_bottles({ order_number, customer_email
 }
 
 const TOOLS = {
-  lookup_account, get_order_status, get_subscription_details,
+  lookup_account, lookup_by_name, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, resume_subscription, reschedule_delivery,
   initiate_return, process_refund, cancel_order, apply_discount, update_subscription_frequency,
   change_subscription_bottles, update_order_address, send_portal_link, notify_slack,
