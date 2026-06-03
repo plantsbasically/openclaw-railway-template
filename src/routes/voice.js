@@ -14,6 +14,7 @@ const SETUP_PASSWORD = process.env.SETUP_PASSWORD;
 const LOG_DIR = path.join(process.env.OPENCLAW_STATE_DIR || '/data/.openclaw', 'voice-logs');
 
 const MILO_INSTRUCTIONS = fs.readFileSync(path.join(__dirname, 'milo-prompt.md'), 'utf8');
+const twilioClient = twilio();
 
 function saveCallLog(log) {
   try {
