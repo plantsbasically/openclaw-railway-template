@@ -226,7 +226,7 @@ export function setupVoiceHttpRoutes() {
   // Twilio calls the agent first; when they pick up, bridges to the customer.
   // Body: { to: "+16318386044", agent: "+15551234567" }
   // agent is optional — falls back to AGENT_PHONE_NUMBER env var
-  router.post('/dial', requireAuth, async (req, res) => {
+  router.post('/dial', requireAuth, express.json(), async (req, res) => {
     try {
       const { to, agent } = req.body;
       const agentPhone = agent || process.env.AGENT_PHONE_NUMBER;
