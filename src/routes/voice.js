@@ -194,7 +194,7 @@ const SESSION_CONFIG = {
 export function setupVoiceHttpRoutes() {
   const router = express.Router();
 
-  router.post('/incoming', (req, res) => {
+  router.post('/incoming', express.urlencoded({ extended: false }), (req, res) => {
     const host = req.headers.host;
     const from = req.body?.From || '';
     res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
