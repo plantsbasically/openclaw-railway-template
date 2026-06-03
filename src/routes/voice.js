@@ -176,7 +176,9 @@ const SESSION_CONFIG = {
         type: 'object',
         properties: {
           message: { type: 'string', description: 'What happened and what needs follow-up. MUST include customer name, email or phone, and order number if known.' },
-          urgent: { type: 'boolean', description: 'true to @mention Kyle directly. Use for: chargeback/legal, adverse reaction, refund over $150, manager request, batch quality issue.' }
+          urgent: { type: 'boolean', description: 'true to @mention Kyle directly. Use for: chargeback/legal, adverse reaction, refund over $150, manager request, batch quality issue.' },
+          callback_phone: { type: 'string', description: "Customer's phone number in E.164 format (e.g. +16318386044) if they requested a callback. Adds a one-click call back link to the Slack message." },
+          callback_name: { type: 'string', description: "Customer's full name — included in the callback link so the agent knows who they're calling." }
         },
         required: ['message']
       }

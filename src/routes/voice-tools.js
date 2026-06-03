@@ -449,11 +449,21 @@ export async function send_portal_link({ customer_email, customer_name }) {
   }
 }
 
-export async function notify_slack({ message, urgent = false }) {
+export async function notify_slack({ message, urgent = false, callback_phone = null, callback_name = null }) {
   try {
+    let callbackLine = '';
+    if (callback_phone) {
+      const host = process.env.RAILWAY_PUBLIC_DOMAIN
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : 'https://openclaw-production-ad38.up.railway.app';
+      const secret = encodeURIComponent(process.env.SETUP_PASSWORD || '');
+      const to = encodeURIComponent(callback_phone);
+      const name = encodeURIComponent(callback_name || '');
+      callbackLine = `\n📞 *Call Back:* ${host}/voice/callback?to=${to}&name=${name}&s=${secret}`;
+    }
     const text = urgent
-      ? `🚨 *Escalation needed* — <@${SLACK_KYLE_USER_ID}>\n${message}`
-      : `📞 *Milo voice call note*\n${message}`;
+      ? `🚨 *Escalation needed* — <@${SLACK_KYLE_USER_ID}>\n${message}${callbackLine}`
+      : `📞 *Milo voice call note*\n${message}${callbackLine}`;
     const res = await fetch(SLACK_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
