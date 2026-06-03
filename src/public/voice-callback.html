@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Call Back — Plants Basically</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f3; color: #1a1a1a; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+    .card { background: #fff; border-radius: 14px; border: 1px solid #e5e5e5; padding: 32px; width: 100%; max-width: 420px; }
+    .logo { font-size: 28px; margin-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .how-it-works { background: #f5f5f3; border-radius: 8px; padding: 14px 16px; margin: 16px 0; font-size: 13px; color: #444; line-height: 1.7; }
+    .how-it-works strong { color: #1a1a1a; }
+    .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 6px; margin-top: 20px; }
+    .customer-number { font-size: 18px; font-weight: 600; color: #1a1a1a; letter-spacing: 0.02em; }
+    input { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; font-size: 15px; margin-top: 6px; }
+    input:focus { outline: none; border-color: #1a1a1a; }
+    .save-hint { font-size: 11px; color: #aaa; margin-top: 5px; }
+    button { width: 100%; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; }
+    button:hover { background: #333; }
+    button:disabled { background: #ccc; cursor: default; }
+    .privacy { font-size: 12px; color: #aaa; text-align: center; margin-top: 14px; }
+    .privacy strong { color: #666; }
+    .status { display: none; text-align: center; padding: 16px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+    .status.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .status.error { display: block; background: #fff0f0; color: #c00; border: 1px solid #fecaca; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">📞</div>
+  <h1>Call Back Customer</h1>
+
+  <div class="how-it-works">
+    <strong>How it works:</strong><br>
+    1. Enter your phone number below<br>
+    2. We'll call <strong>your phone first</strong><br>
+    3. Pick up — you'll hear "Connecting you now"<br>
+    4. The customer gets called and you're connected<br><br>
+    <strong>Your personal number is never revealed.</strong> The customer sees <strong>(888) 868-2205</strong> on their screen.
+  </div>
+
+  <div class="label">Calling Customer</div>
+  <div class="customer-number" id="customer-display">Loading...</div>
+
+  <div class="label">Your Phone Number</div>
+  <input type="tel" id="agent-number" placeholder="+1 (555) 000-0000" />
+  <div class="save-hint">Saved to this browser — you won't need to enter it again.</div>
+
+  <button id="call-btn" onclick="triggerCall()">📞 Call Me First</button>
+  <div class="privacy">Customer sees <strong>(888) 868-2205</strong> · Your number stays private</div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const customerPhone = params.get('to') || '';
+  const customerName = params.get('name') || '';
+
+  // Display customer info
+  const display = document.getElementById('customer-display');
+  display.textContent = customerName ? `${customerName} · ${customerPhone}` : customerPhone || 'No number provided';
+
+  // Load saved agent number
+  const agentInput = document.getElementById('agent-number');
+  agentInput.value = localStorage.getItem('agent_phone') || '';
+
+  async function triggerCall() {
+    const agent = agentInput.value.trim();
+    if (!agent) { agentInput.focus(); return; }
+    if (!customerPhone) { showStatus('No customer number in URL.', 'error'); return; }
+
+    localStorage.setItem('agent_phone', agent);
+
+    const btn = document.getElementById('call-btn');
+    btn.disabled = true;
+    btn.textContent = 'Calling your phone...';
+
+    try {
+      const res = await fetch('/voice/dial', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: customerPhone, agent }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showStatus('✅ Your phone is ringing — pick up and we\'ll connect you to the customer.', 'success');
+        btn.textContent = '📞 Called — pick up your phone';
+      } else {
+        showStatus(data.error || 'Something went wrong.', 'error');
+        btn.disabled = false;
+        btn.textContent = '📞 Call Me First';
+      }
+    } catch (e) {
+      showStatus('Connection error — try again.', 'error');
+      btn.disabled = false;
+      btn.textContent = '📞 Call Me First';
+    }
+  }
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status ${type}`;
+  }
+
+  agentInput.addEventListener('keydown', e => { if (e.key === 'Enter') triggerCall(); });
+</script>
+</body>
+</html>

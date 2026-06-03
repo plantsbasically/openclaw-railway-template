@@ -270,6 +270,11 @@ export function setupVoiceHttpRoutes() {
     res.sendFile(path.join(__dirname, '../public/voice-dashboard.html'));
   });
 
+  // GET /voice/callback — agent click-to-call page (linked from Gorgias tickets)
+  router.get('/callback', requireAuth, (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/voice-callback.html'));
+  });
+
   // GET /voice/logs — view recent call transcripts (password protected)
   router.get('/logs', requireAuth, (req, res) => {
 

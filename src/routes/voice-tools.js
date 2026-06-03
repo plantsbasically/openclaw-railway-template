@@ -551,11 +551,19 @@ export async function logCallToGorgias(log) {
       .map(t => `${t.role === 'milo' ? 'Milo' : 'Customer'}: ${t.text}`)
       .join('\n');
 
+    const railwayHost = process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : 'https://openclaw-production-ad38.up.railway.app';
+    const callbackLink = log.caller_phone
+      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(log.caller_phone)}&name=${encodeURIComponent(callerLabel)}`
+      : null;
+
     const body = [
       'CUSTOMER',
       `Name: ${callerLabel}`,
       `Email: ${customerEmail || 'not collected'}`,
       `Phone: ${log.caller_phone || 'not collected'}`,
+      callbackLink ? `📞 Call Back: ${callbackLink}` : '',
       adminUrl ? `Order: ${adminUrl}` : '',
       '',
       'REASON FOR CALL',
