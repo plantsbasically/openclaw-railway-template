@@ -254,10 +254,13 @@ export function setupVoiceHttpRoutes() {
   router.get('/bridge', (req, res) => {
     const to = req.query.to;
     if (!to) return res.status(400).send('Missing to');
+    const callerId = process.env.TWILIO_PHONE_NUMBER || '';
+    const callerIdAttr = callerId ? ` callerId="${callerId}"` : '';
+    console.log(`[voice/bridge] bridging to=${to} callerId=${callerId}`);
     res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say>Connecting you to the customer now.</Say>
-  <Dial callerId="${process.env.TWILIO_PHONE_NUMBER || ''}">${to}</Dial>
+  <Say>Connecting you now.</Say>
+  <Dial${callerIdAttr}><Number>${to}</Number></Dial>
 </Response>`);
   });
 
