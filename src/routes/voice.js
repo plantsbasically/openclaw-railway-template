@@ -108,8 +108,8 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'cancel_subscription',
-      description: "Cancel a subscription. Use order_number — never ask the customer for a subscription ID. Always attempt retention first (offer pause or skip).",
-      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" } }, required: ['order_number'] }
+      description: "Cancel a subscription. Use order_number if you have it, otherwise use customer_email alone — never ask the customer for a subscription ID. Always attempt retention first (offer pause or skip).",
+      parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number (use if available)' }, customer_email: { type: 'string', description: "Customer email — use this alone if no order number" } }, required: [] }
     },
     {
       type: 'function', name: 'initiate_return',
