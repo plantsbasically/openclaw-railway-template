@@ -250,8 +250,9 @@ export function setupVoiceHttpRoutes() {
     }
   });
 
-  // GET /voice/bridge — TwiML returned when agent picks up, dials the customer
-  router.get('/bridge', (req, res) => {
+  // POST /voice/bridge — TwiML returned when agent picks up, dials the customer
+  // Twilio POSTs to this URL by default when the call is answered
+  router.post('/bridge', (req, res) => {
     const to = req.query.to;
     if (!to) return res.status(400).send('Missing to');
     const callerId = process.env.TWILIO_PHONE_NUMBER || '';
