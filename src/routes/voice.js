@@ -227,9 +227,15 @@ export function setupVoiceHttpRoutes() {
   // Twilio calls the agent first; when they pick up, bridges to the customer.
   // Body: { to: "+16318386044", agent: "+15551234567" }
   // agent is optional — falls back to AGENT_PHONE_NUMBER env var
-  router.post('/dial', requireAuth, express.json(), async (req, res) => {
+  router.post('/dial', express.json(), async (req, res) => {
+    // Accept Basic auth OR a secret token in the request body
+    const { to, agent, secret } = req.body || {};
+    const basicAuth = req.headers.authorization || '';
+    const basicPassword = Buffer.from(basicAuth.replace(/^Basic /, ''), 'base64').toString().split(':')[1];
+    if (secret !== SETUP_PASSWORD && basicPassword !== SETUP_PASSWORD) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     try {
-      const { to, agent } = req.body;
       const agentPhone = agent || process.env.AGENT_PHONE_NUMBER;
       if (!to) return res.status(400).json({ error: 'to is required' });
       if (!agentPhone) return res.status(400).json({ error: 'agent phone not set — pass agent in body or set AGENT_PHONE_NUMBER env var' });
@@ -271,7 +277,8 @@ export function setupVoiceHttpRoutes() {
   });
 
   // GET /voice/callback — agent click-to-call page (linked from Gorgias tickets)
-  router.get('/callback', requireAuth, (req, res) => {
+  // No auth required on the page itself — secret token is embedded in the URL
+  router.get('/callback', (req, res) => {
     res.sendFile(path.join(__dirname, '../public/voice-callback.html'));
   });
 

@@ -58,6 +58,7 @@
   const params = new URLSearchParams(window.location.search);
   const customerPhone = params.get('to') || '';
   const customerName = params.get('name') || '';
+  const secret = params.get('s') || '';
 
   // Display customer info
   const display = document.getElementById('customer-display');
@@ -83,7 +84,7 @@
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: customerPhone, agent }),
+        body: JSON.stringify({ to: customerPhone, agent, secret }),
       });
       const data = await res.json();
       if (data.success) {

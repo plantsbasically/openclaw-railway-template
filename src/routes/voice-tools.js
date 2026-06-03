@@ -554,8 +554,9 @@ export async function logCallToGorgias(log) {
     const railwayHost = process.env.RAILWAY_PUBLIC_DOMAIN
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : 'https://openclaw-production-ad38.up.railway.app';
+    const setupPassword = process.env.SETUP_PASSWORD || '';
     const callbackLink = log.caller_phone
-      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(log.caller_phone)}&name=${encodeURIComponent(callerLabel)}`
+      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(log.caller_phone)}&name=${encodeURIComponent(callerLabel)}&s=${encodeURIComponent(setupPassword)}`
       : null;
 
     const body = [
