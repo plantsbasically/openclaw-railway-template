@@ -209,16 +209,59 @@ export function setupVoiceHttpRoutes() {
     res.sendStatus(200);
   });
 
-  // GET /voice/logs — view recent call transcripts (password protected)
-  router.get('/logs', (req, res) => {
+  // Auth helper — same Basic auth as /voice/logs
+  function requireAuth(req, res, next) {
     const auth = req.headers.authorization || '';
     const b64 = auth.replace(/^Basic /, '');
     const decoded = Buffer.from(b64, 'base64').toString();
     const password = decoded.split(':')[1];
     if (!SETUP_PASSWORD || password !== SETUP_PASSWORD) {
-      res.set('WWW-Authenticate', 'Basic realm="Milo Logs"');
+      res.set('WWW-Authenticate', 'Basic realm="Milo"');
       return res.status(401).send('Unauthorized');
     }
+    next();
+  }
+
+  // POST /voice/dial — initiate a two-leg outbound call
+  // Twilio calls the agent first; when they pick up, bridges to the customer.
+  // Body: { to: "+16318386044", agent: "+15551234567" }
+  // agent is optional — falls back to AGENT_PHONE_NUMBER env var
+  router.post('/dial', requireAuth, async (req, res) => {
+    try {
+      const { to, agent } = req.body;
+      const agentPhone = agent || process.env.AGENT_PHONE_NUMBER;
+      if (!to) return res.status(400).json({ error: 'to is required' });
+      if (!agentPhone) return res.status(400).json({ error: 'agent phone not set — pass agent in body or set AGENT_PHONE_NUMBER env var' });
+      const from = process.env.TWILIO_PHONE_NUMBER;
+      if (!from) return res.status(400).json({ error: 'TWILIO_PHONE_NUMBER env var not set' });
+
+      const bridgeUrl = `https://${req.headers.host}/voice/bridge?to=${encodeURIComponent(to)}`;
+      const call = await twilioClient.calls.create({
+        to: agentPhone,
+        from,
+        url: bridgeUrl,
+      });
+      console.log(`[voice/dial] agent=${agentPhone} customer=${to} sid=${call.sid}`);
+      res.json({ success: true, sid: call.sid, message: `Calling your phone now — pick up and we'll connect you to ${to}` });
+    } catch (err) {
+      console.error('[voice/dial]', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /voice/bridge — TwiML returned when agent picks up, dials the customer
+  router.get('/bridge', (req, res) => {
+    const to = req.query.to;
+    if (!to) return res.status(400).send('Missing to');
+    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Connecting you to the customer now.</Say>
+  <Dial callerId="${process.env.TWILIO_PHONE_NUMBER || ''}">${to}</Dial>
+</Response>`);
+  });
+
+  // GET /voice/logs — view recent call transcripts (password protected)
+  router.get('/logs', requireAuth, (req, res) => {
 
     const id = req.query.id;
     try {
