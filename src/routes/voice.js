@@ -334,6 +334,7 @@ export function handleVoiceStream(ws, req) {
 
   let streamSid = null;
   let sessionReady = false;
+  let responseActive = false; // track whether xAI has an active response to cancel
 
   // Transcript log — saved to disk when call ends
   const log = {
@@ -393,7 +394,12 @@ export function handleVoiceStream(ws, req) {
         xaiWs.send(JSON.stringify({ type: 'response.create' }));
         break;
 
+      case 'response.created':
+        responseActive = true;
+        break;
+
       case 'response.output_audio.delta':
+        responseActive = true;
         if (streamSid && ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ event: 'media', streamSid, media: { payload: event.delta } }));
         }
@@ -406,6 +412,8 @@ export function handleVoiceStream(ws, req) {
 
       case 'response.output_audio_transcript.done':
       case 'response.done':
+      case 'response.cancelled':
+        responseActive = false;
         if (miloBuffer.trim()) {
           addTurn('milo', miloBuffer.trim());
           miloBuffer = '';
@@ -423,7 +431,10 @@ export function handleVoiceStream(ws, req) {
         if (streamSid && ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify({ event: 'clear', streamSid }));
         }
-        xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        if (responseActive) {
+          responseActive = false;
+          xaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+        }
         break;
 
       case 'response.function_call_arguments.done': {
