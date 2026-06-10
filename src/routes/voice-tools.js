@@ -509,8 +509,13 @@ export async function logCallToGorgias(log) {
       if (t.result?.shopify_admin_url && !adminUrl) adminUrl = t.result.shopify_admin_url;
     }
 
-    const callerIdentifier = customerEmail || log.caller_phone || 'unknown@voice.call';
-    const callerLabel = customerName || log.caller_phone || 'Unknown caller';
+    // Outbound bridge calls show the Twilio number as caller_phone — don't use it as customer email
+    const TWILIO_NUMBER = process.env.TWILIO_FROM_NUMBER || '+18888682205';
+    const isOutboundBridge = log.caller_phone === TWILIO_NUMBER;
+    const customerPhone = isOutboundBridge ? null : log.caller_phone;
+
+    const callerIdentifier = customerEmail || 'unknown@voice.call';
+    const callerLabel = customerName || customerPhone || 'Unknown caller';
 
     // Clean up transcript — dedupe streaming partials
     const turns = consolidateTranscript(log.transcript);
@@ -565,15 +570,15 @@ export async function logCallToGorgias(log) {
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : 'https://openclaw-production-ad38.up.railway.app';
     const setupPassword = process.env.SETUP_PASSWORD || '';
-    const callbackLink = log.caller_phone
-      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(log.caller_phone)}&name=${encodeURIComponent(callerLabel)}&s=${encodeURIComponent(setupPassword)}`
+    const callbackLink = customerPhone
+      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(customerPhone)}&name=${encodeURIComponent(callerLabel)}&s=${encodeURIComponent(setupPassword)}`
       : null;
 
     const body = [
       'CUSTOMER',
       `Name: ${callerLabel}`,
       `Email: ${customerEmail || 'not collected'}`,
-      `Phone: ${log.caller_phone || 'not collected'}`,
+      `Phone: ${customerPhone || 'not collected'}`,
       callbackLink ? `📞 Call Back: ${callbackLink}` : '',
       adminUrl ? `Order: ${adminUrl}` : '',
       '',
