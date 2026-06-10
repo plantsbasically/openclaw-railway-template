@@ -283,6 +283,41 @@ export function setupVoiceHttpRoutes() {
     }
   });
 
+  // POST /voice/token — mint a Twilio Voice access token for browser calling
+  // The callback page uses this to register the agent's browser as a softphone.
+  router.post('/token', express.json(), (req, res) => {
+    const { secret, name } = req.body || {};
+    if (secret !== SETUP_PASSWORD) return res.status(401).json({ error: 'Unauthorized' });
+    const apiKeySid = process.env.TWILIO_API_KEY_SID;
+    const apiKeySecret = process.env.TWILIO_API_KEY_SECRET;
+    const appSid = process.env.TWILIO_TWIML_APP_SID;
+    if (!apiKeySid || !apiKeySecret || !appSid) {
+      return res.status(400).json({ error: 'Browser calling not configured — set TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET, TWILIO_TWIML_APP_SID' });
+    }
+    const identity = `agent-${String(name || 'anon').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24) || 'anon'}`;
+    const AccessToken = twilio.jwt.AccessToken;
+    const token = new AccessToken(process.env.TWILIO_ACCOUNT_SID, apiKeySid, apiKeySecret, { identity, ttl: 3600 });
+    token.addGrant(new AccessToken.VoiceGrant({ outgoingApplicationSid: appSid, incomingAllow: false }));
+    res.json({ token: token.toJwt(), identity });
+  });
+
+  // POST /voice/agent-dial — TwiML webhook for the browser softphone.
+  // The Voice SDK connect() params arrive in the body; dial the customer
+  // with the company caller ID. Same own-number guard as /voice/dial.
+  router.post('/agent-dial', express.urlencoded({ extended: false }), (req, res) => {
+    const to = toE164(req.body?.To);
+    const from = process.env.TWILIO_PHONE_NUMBER || '';
+    if (!to || to === toE164(from)) {
+      console.error(`[voice/agent-dial] rejected to=${req.body?.To}`);
+      return res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Invalid customer number.</Say></Response>');
+    }
+    console.log(`[voice/agent-dial] browser agent ${req.body?.From || ''} dialing ${to}`);
+    res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial callerId="${from}" answerOnBridge="true"><Number>${to}</Number></Dial>
+</Response>`);
+  });
+
   // POST /voice/bridge — TwiML returned when agent picks up, dials the customer
   // Twilio POSTs to this URL by default when the call is answered
   router.post('/bridge', (req, res) => {

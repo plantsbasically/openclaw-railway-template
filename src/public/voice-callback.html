@@ -20,11 +20,22 @@
     button { width: 100%; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; }
     button:hover { background: #333; }
     button:disabled { background: #ccc; cursor: default; }
+    button.hangup { background: #c00; }
+    button.hangup:hover { background: #a00; }
+    button.mute-btn { background: #fff; color: #1a1a1a; border: 1px solid #ddd; }
+    button.mute-btn:hover { background: #f5f5f3; }
+    .call-controls { display: none; }
+    .call-controls.active { display: block; }
+    .call-timer { text-align: center; font-size: 26px; font-weight: 700; margin-top: 18px; font-variant-numeric: tabular-nums; }
     .privacy { font-size: 12px; color: #aaa; text-align: center; margin-top: 14px; }
     .privacy strong { color: #666; }
     .status { display: none; text-align: center; padding: 16px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
     .status.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
     .status.error { display: block; background: #fff0f0; color: #c00; border: 1px solid #fecaca; }
+    .status.info { display: block; background: #f0f4ff; color: #1e3a8a; border: 1px solid #c7d7fe; }
+    details { margin-top: 24px; border-top: 1px solid #eee; padding-top: 14px; }
+    summary { font-size: 13px; color: #888; cursor: pointer; }
+    summary:hover { color: #444; }
   </style>
 </head>
 <body>
@@ -34,37 +45,54 @@
 
   <div class="how-it-works">
     <strong>How it works:</strong><br>
-    1. Enter <strong>your own cell number</strong> below<br>
-    2. We'll call <strong>your phone first</strong><br>
-    3. Pick up — you'll hear "Connecting you now"<br>
-    4. The customer gets called and you're connected<br><br>
-    <strong>Your personal number is never revealed.</strong> The customer sees <strong>(888) 868-2205</strong> on their screen.
+    1. Put on a headset (or use your laptop mic)<br>
+    2. Click <strong>Call from this computer</strong><br>
+    3. Allow microphone access when your browser asks<br>
+    4. The customer's phone rings — talk like a normal call<br><br>
+    <strong>No phone needed.</strong> The customer sees <strong>(888) 868-2205</strong> on their screen.
   </div>
 
   <div class="label">Calling Customer</div>
   <div class="customer-number" id="customer-display">Loading...</div>
 
-  <div class="label">Your Phone Number</div>
-  <input type="tel" id="agent-number" placeholder="+1 (555) 000-0000" />
-  <div class="save-hint">Your personal cell — NOT (888) 868-2205 and NOT the customer's number. Saved to this browser so you won't need to enter it again.</div>
+  <div class="label">Your Name</div>
+  <input type="text" id="agent-name" placeholder="e.g. Christine" />
+  <div class="save-hint">For the call log. Saved to this browser.</div>
 
-  <button id="call-btn" onclick="triggerCall()">📞 Call Me First</button>
-  <div class="privacy">Customer sees <strong>(888) 868-2205</strong> · Your number stays private</div>
+  <div id="dial-controls">
+    <button id="call-btn" onclick="startBrowserCall()">🎧 Call from this computer</button>
+  </div>
 
+  <div class="call-controls" id="call-controls">
+    <div class="call-timer" id="call-timer">00:00</div>
+    <button class="mute-btn" id="mute-btn" onclick="toggleMute()">🎙️ Mute</button>
+    <button class="hangup" onclick="hangUp()">⏹ Hang Up</button>
+  </div>
+
+  <div class="privacy">Customer sees <strong>(888) 868-2205</strong> · No personal number involved</div>
   <div class="status" id="status"></div>
+
+  <details>
+    <summary>Browser call not working? Use your phone instead</summary>
+    <div class="label">Your Phone Number</div>
+    <input type="tel" id="agent-number" placeholder="+1 (555) 000-0000" />
+    <div class="save-hint">Your personal cell — NOT (888) 868-2205 and NOT the customer's number. We call you first, then connect the customer. Your number stays private.</div>
+    <button id="phone-btn" onclick="triggerPhoneCall()">📞 Call My Phone First</button>
+  </details>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@twilio/voice-sdk@2.12.1/dist/twilio.min.js"></script>
 <script>
   const params = new URLSearchParams(window.location.search);
   const customerPhone = params.get('to') || '';
   const customerName = params.get('name') || '';
   const secret = params.get('s') || '';
 
-  // Display customer info
-  const display = document.getElementById('customer-display');
-  display.textContent = customerName ? `${customerName} · ${customerPhone}` : customerPhone || 'No number provided';
+  document.getElementById('customer-display').textContent =
+    customerName ? `${customerName} · ${customerPhone}` : customerPhone || 'No number provided';
 
-  // Load saved agent number
+  const nameInput = document.getElementById('agent-name');
+  nameInput.value = localStorage.getItem('agent_name') || '';
   const agentInput = document.getElementById('agent-number');
   agentInput.value = localStorage.getItem('agent_phone') || '';
 
@@ -80,7 +108,108 @@
 
   const COMPANY_LINE = '+18888682205';
 
-  async function triggerCall() {
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status ${type}`;
+  }
+
+  // ── Browser calling (primary) ────────────────────────────────────────────
+
+  let device = null;
+  let activeCall = null;
+  let timerInterval = null;
+
+  function startTimer() {
+    const el = document.getElementById('call-timer');
+    const start = Date.now();
+    timerInterval = setInterval(() => {
+      const s = Math.floor((Date.now() - start) / 1000);
+      el.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }, 1000);
+  }
+
+  function setInCall(on) {
+    document.getElementById('dial-controls').style.display = on ? 'none' : 'block';
+    document.getElementById('call-controls').className = on ? 'call-controls active' : 'call-controls';
+    if (!on && timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+    if (!on) {
+      document.getElementById('call-timer').textContent = '00:00';
+      const mb = document.getElementById('mute-btn');
+      mb.textContent = '🎙️ Mute';
+    }
+  }
+
+  async function startBrowserCall() {
+    if (!customerPhone) { showStatus('No customer number in URL.', 'error'); return; }
+    const name = nameInput.value.trim();
+    if (!name) { nameInput.focus(); return; }
+    localStorage.setItem('agent_name', name);
+
+    const btn = document.getElementById('call-btn');
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
+
+    try {
+      const res = await fetch('/voice/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret, name }),
+      });
+      const data = await res.json();
+      if (!data.token) throw new Error(data.error || 'Could not get call token');
+
+      device = new Twilio.Device(data.token, { codecPreferences: ['opus', 'pcmu'] });
+      activeCall = await device.connect({ params: { To: customerPhone } });
+
+      showStatus(`Ringing ${customerName || customerPhone}...`, 'info');
+      setInCall(true);
+
+      activeCall.on('accept', () => {
+        showStatus('Connected — you\'re live with the customer.', 'success');
+        startTimer();
+      });
+      activeCall.on('disconnect', endBrowserCall);
+      activeCall.on('cancel', endBrowserCall);
+      activeCall.on('error', (e) => {
+        showStatus(`Call error: ${e.message}`, 'error');
+        endBrowserCall();
+      });
+    } catch (e) {
+      const msg = /Permission|NotAllowed/i.test(e.message || e.name || '')
+        ? 'Microphone blocked — click the 🔒 icon in the address bar, allow the mic, and try again.'
+        : `Couldn't start call: ${e.message}`;
+      showStatus(msg, 'error');
+      endBrowserCall();
+    }
+  }
+
+  function endBrowserCall() {
+    setInCall(false);
+    if (activeCall) { try { activeCall.disconnect(); } catch {} activeCall = null; }
+    if (device) { try { device.destroy(); } catch {} device = null; }
+    const btn = document.getElementById('call-btn');
+    btn.disabled = false;
+    btn.textContent = '🎧 Call from this computer';
+    const st = document.getElementById('status');
+    if (st.classList.contains('success')) showStatus('Call ended.', 'info');
+  }
+
+  function hangUp() {
+    if (activeCall) activeCall.disconnect();
+    else endBrowserCall();
+  }
+
+  function toggleMute() {
+    if (!activeCall) return;
+    const muted = !activeCall.isMuted();
+    activeCall.mute(muted);
+    document.getElementById('mute-btn').textContent = muted ? '🔇 Unmute' : '🎙️ Mute';
+  }
+
+  // ── Phone fallback (two-leg dial) ────────────────────────────────────────
+
+  async function triggerPhoneCall() {
     const agent = agentInput.value.trim();
     if (!agent) { agentInput.focus(); return; }
     if (!customerPhone) { showStatus('No customer number in URL.', 'error'); return; }
@@ -97,7 +226,7 @@
 
     localStorage.setItem('agent_phone', agent);
 
-    const btn = document.getElementById('call-btn');
+    const btn = document.getElementById('phone-btn');
     btn.disabled = true;
     btn.textContent = 'Calling your phone...';
 
@@ -115,22 +244,17 @@
       } else {
         showStatus(data.error || 'Something went wrong.', 'error');
         btn.disabled = false;
-        btn.textContent = '📞 Call Me First';
+        btn.textContent = '📞 Call My Phone First';
       }
     } catch (e) {
       showStatus('Connection error — try again.', 'error');
       btn.disabled = false;
-      btn.textContent = '📞 Call Me First';
+      btn.textContent = '📞 Call My Phone First';
     }
   }
 
-  function showStatus(msg, type) {
-    const el = document.getElementById('status');
-    el.textContent = msg;
-    el.className = `status ${type}`;
-  }
-
-  agentInput.addEventListener('keydown', e => { if (e.key === 'Enter') triggerCall(); });
+  agentInput.addEventListener('keydown', e => { if (e.key === 'Enter') triggerPhoneCall(); });
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') startBrowserCall(); });
 </script>
 </body>
 </html>
