@@ -225,24 +225,49 @@ export function setupVoiceHttpRoutes() {
     next();
   }
 
+  // Normalize a phone number to E.164 (US default) for comparison and dialing.
+  // "1-888-868-2205" / "(888) 868-2205" / "+18888682205" all → "+18888682205"
+  function toE164(num) {
+    if (!num) return null;
+    const digits = String(num).replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+    if (digits.startsWith('+')) return digits;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    if (digits.length === 10) return `+1${digits}`;
+    return `+${digits}`;
+  }
+
   // POST /voice/dial — initiate a two-leg outbound call
   // Twilio calls the agent first; when they pick up, bridges to the customer.
   // Body: { to: "+16318386044", agent: "+15551234567" }
   // agent is optional — falls back to AGENT_PHONE_NUMBER env var
   router.post('/dial', express.json(), async (req, res) => {
     // Accept Basic auth OR a secret token in the request body
-    const { to, agent, secret } = req.body || {};
+    const { to: toRaw, agent, secret } = req.body || {};
     const basicAuth = req.headers.authorization || '';
     const basicPassword = Buffer.from(basicAuth.replace(/^Basic /, ''), 'base64').toString().split(':')[1];
     if (secret !== SETUP_PASSWORD && basicPassword !== SETUP_PASSWORD) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
     try {
-      const agentPhone = agent || process.env.AGENT_PHONE_NUMBER;
+      const to = toE164(toRaw);
+      const agentPhone = toE164(agent || process.env.AGENT_PHONE_NUMBER);
       if (!to) return res.status(400).json({ error: 'to is required' });
       if (!agentPhone) return res.status(400).json({ error: 'agent phone not set — pass agent in body or set AGENT_PHONE_NUMBER env var' });
       const from = process.env.TWILIO_PHONE_NUMBER;
       if (!from) return res.status(400).json({ error: 'TWILIO_PHONE_NUMBER env var not set' });
+
+      // Guard against the Milo loop: dialing our own Twilio number routes to
+      // /incoming and the AI answers as the "agent" or "customer".
+      const ownNumber = toE164(from);
+      if (agentPhone === ownNumber) {
+        return res.status(400).json({ error: `That's the company line (${from}) — enter your own cell number in "Your Phone Number".` });
+      }
+      if (to === ownNumber) {
+        return res.status(400).json({ error: `The customer number is the company line (${from}) — this link is broken, don't use it.` });
+      }
+      if (agentPhone === to) {
+        return res.status(400).json({ error: "Your number and the customer's number are the same — enter YOUR cell in \"Your Phone Number\", not the customer's." });
+      }
 
       const bridgeUrl = `https://${req.headers.host}/voice/bridge?to=${encodeURIComponent(to)}`;
       const call = await twilioClient.calls.create({

@@ -34,7 +34,7 @@
 
   <div class="how-it-works">
     <strong>How it works:</strong><br>
-    1. Enter your phone number below<br>
+    1. Enter <strong>your own cell number</strong> below<br>
     2. We'll call <strong>your phone first</strong><br>
     3. Pick up — you'll hear "Connecting you now"<br>
     4. The customer gets called and you're connected<br><br>
@@ -46,7 +46,7 @@
 
   <div class="label">Your Phone Number</div>
   <input type="tel" id="agent-number" placeholder="+1 (555) 000-0000" />
-  <div class="save-hint">Saved to this browser — you won't need to enter it again.</div>
+  <div class="save-hint">Your personal cell — NOT (888) 868-2205 and NOT the customer's number. Saved to this browser so you won't need to enter it again.</div>
 
   <button id="call-btn" onclick="triggerCall()">📞 Call Me First</button>
   <div class="privacy">Customer sees <strong>(888) 868-2205</strong> · Your number stays private</div>
@@ -68,10 +68,32 @@
   const agentInput = document.getElementById('agent-number');
   agentInput.value = localStorage.getItem('agent_phone') || '';
 
+  // Normalize to E.164 (US default) so "1-888-868-2205" and "(888) 868-2205" compare equal
+  function toE164(num) {
+    if (!num) return null;
+    const digits = String(num).replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+    if (digits.startsWith('+')) return digits;
+    if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+    if (digits.length === 10) return '+1' + digits;
+    return '+' + digits;
+  }
+
+  const COMPANY_LINE = '+18888682205';
+
   async function triggerCall() {
     const agent = agentInput.value.trim();
     if (!agent) { agentInput.focus(); return; }
     if (!customerPhone) { showStatus('No customer number in URL.', 'error'); return; }
+    if (toE164(agent) === COMPANY_LINE) {
+      showStatus('That\'s the company line — enter YOUR own cell number. The customer will still see (888) 868-2205.', 'error');
+      agentInput.focus();
+      return;
+    }
+    if (toE164(agent) === toE164(customerPhone)) {
+      showStatus('That\'s the customer\'s number — enter YOUR own cell number here.', 'error');
+      agentInput.focus();
+      return;
+    }
 
     localStorage.setItem('agent_phone', agent);
 
