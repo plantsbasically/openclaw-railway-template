@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>New Call — Plants Basically</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f3; color: #1a1a1a; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+    .card { background: #fff; border-radius: 14px; border: 1px solid #e5e5e5; padding: 32px; width: 100%; max-width: 440px; }
+    .logo { font-size: 28px; margin-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .sub { font-size: 13px; color: #888; line-height: 1.6; }
+    .label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #888; margin-bottom: 6px; margin-top: 20px; }
+    input { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; font-size: 15px; margin-top: 6px; }
+    input:focus { outline: none; border-color: #1a1a1a; }
+    .save-hint { font-size: 11px; color: #aaa; margin-top: 5px; }
+    button { width: 100%; background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; }
+    button:hover { background: #333; }
+    button:disabled { background: #ccc; cursor: default; }
+    .result { display: none; margin-top: 20px; border-top: 1px solid #eee; padding-top: 18px; }
+    .result.active { display: block; }
+    .result-number { font-size: 17px; font-weight: 600; }
+    .link-row { display: flex; gap: 8px; margin-top: 12px; }
+    .link-box { flex: 1; font-size: 12px; color: #555; background: #f5f5f3; border: 1px solid #e5e5e5; border-radius: 8px; padding: 10px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .btn-row { display: flex; gap: 10px; }
+    .btn-row button { margin-top: 12px; }
+    button.secondary { background: #fff; color: #1a1a1a; border: 1px solid #ddd; }
+    button.secondary:hover { background: #f5f5f3; }
+    .status { display: none; text-align: center; padding: 14px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+    .status.success { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .status.error { display: block; background: #fff0f0; color: #c00; border: 1px solid #fecaca; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">☎️</div>
+  <h1>New Call</h1>
+  <div class="sub">Paste any customer phone number to call them from your browser, or generate a Call Back link to share with the team. The customer always sees <strong>(888) 868-2205</strong>.</div>
+
+  <div class="label">Customer Phone Number</div>
+  <input type="tel" id="phone" placeholder="e.g. 423-316-5546 or +14233165546" autofocus />
+  <div class="save-hint">Any format works — US numbers don't need the +1.</div>
+
+  <div class="label">Customer Name <span style="font-weight:400;text-transform:none;">(optional)</span></div>
+  <input type="text" id="name" placeholder="e.g. Audra Taliaferro" />
+
+  <button onclick="generate()">🔗 Create Call Link</button>
+
+  <div class="result" id="result">
+    <div class="label" style="margin-top:0;">Ready to Call</div>
+    <div class="result-number" id="result-display"></div>
+    <div class="link-row"><div class="link-box" id="link-box"></div></div>
+    <div class="btn-row">
+      <button onclick="openCall()">📞 Call Now</button>
+      <button class="secondary" onclick="copyLink()" id="copy-btn">📋 Copy Link</button>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+  const secret = new URLSearchParams(window.location.search).get('s') || '';
+  const COMPANY_LINE = '+18888682205';
+  let currentLink = '';
+
+  // Normalize to E.164, US default
+  function toE164(num) {
+    if (!num) return null;
+    const digits = String(num).replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+    if (digits.startsWith('+')) return digits;
+    if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+    if (digits.length === 10) return '+1' + digits;
+    return '+' + digits;
+  }
+
+  function showStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = `status ${type}`;
+  }
+
+  // Verify the tool link itself carries a valid secret, so a bad bookmark
+  // fails here instead of at call time.
+  (async () => {
+    if (!secret) {
+      showStatus('This tool link is missing its access code — ask Kyle for the current bookmark.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/voice/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret, name: 'link-check' }),
+      });
+      if (res.status === 401) showStatus('This tool link is outdated — ask Kyle for the current bookmark.', 'error');
+    } catch {}
+  })();
+
+  function generate() {
+    const raw = document.getElementById('phone').value.trim();
+    if (!raw) { document.getElementById('phone').focus(); return; }
+    const phone = toE164(raw);
+    if (!phone || phone.replace(/\D/g, '').length < 10) {
+      showStatus(`"${raw}" doesn't look like a complete phone number.`, 'error');
+      return;
+    }
+    if (phone === COMPANY_LINE) {
+      showStatus("That's the company's own number — paste the customer's number.", 'error');
+      return;
+    }
+    const name = document.getElementById('name').value.trim();
+    currentLink = `${window.location.origin}/voice/callback?to=${encodeURIComponent(phone)}`
+      + (name ? `&name=${encodeURIComponent(name)}` : '')
+      + `&s=${encodeURIComponent(secret)}`;
+
+    document.getElementById('result-display').textContent = name ? `${name} · ${phone}` : phone;
+    document.getElementById('link-box').textContent = currentLink;
+    document.getElementById('result').className = 'result active';
+    document.getElementById('status').className = 'status';
+  }
+
+  function openCall() {
+    if (currentLink) window.open(currentLink, '_blank');
+  }
+
+  async function copyLink() {
+    if (!currentLink) return;
+    try {
+      await navigator.clipboard.writeText(currentLink);
+      const btn = document.getElementById('copy-btn');
+      btn.textContent = '✅ Copied';
+      setTimeout(() => { btn.textContent = '📋 Copy Link'; }, 2000);
+    } catch {
+      showStatus('Copy failed — select the link text and copy manually.', 'error');
+    }
+  }
+
+  document.getElementById('phone').addEventListener('keydown', e => { if (e.key === 'Enter') generate(); });
+  document.getElementById('name').addEventListener('keydown', e => { if (e.key === 'Enter') generate(); });
+</script>
+</body>
+</html>

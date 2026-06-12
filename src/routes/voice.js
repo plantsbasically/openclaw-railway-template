@@ -344,6 +344,13 @@ export function setupVoiceHttpRoutes() {
     res.sendFile(path.join(__dirname, '../public/voice-callback.html'));
   });
 
+  // GET /voice/new-call — link generator: paste any phone number, get a
+  // callback link or call immediately. Bookmarked with ?s=<SETUP_PASSWORD>;
+  // generated links reuse that secret so they always work.
+  router.get('/new-call', (req, res) => {
+    res.sendFile(path.join(__dirname, '../public/voice-dialer.html'));
+  });
+
   // GET /voice/logs — view recent call transcripts (password protected)
   router.get('/logs', requireAuth, (req, res) => {
 
