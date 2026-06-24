@@ -499,6 +499,10 @@ export async function logCallToGorgias(log) {
 
     // Extract customer info from tool results
     let customerEmail, customerName, orderNumber, adminUrl;
+    // The number/name Milo verified with the customer for a callback (passed to notify_slack).
+    // This is the source of truth for the callback link — the Twilio caller ID can differ
+    // from where the customer actually wants to be reached.
+    let escalationPhone, escalationName;
     for (const t of log.tools_used || []) {
       if (t.result?.email && !customerEmail) {
         customerEmail = t.result.email;
@@ -507,6 +511,10 @@ export async function logCallToGorgias(log) {
       if (t.args?.customer_email && !customerEmail) customerEmail = t.args.customer_email;
       if (t.result?.order_number && !orderNumber) orderNumber = t.result.order_number;
       if (t.result?.shopify_admin_url && !adminUrl) adminUrl = t.result.shopify_admin_url;
+      if (t.name === 'notify_slack') {
+        if (t.args?.callback_phone && !escalationPhone) escalationPhone = t.args.callback_phone;
+        if (t.args?.callback_name && !escalationName) escalationName = t.args.callback_name;
+      }
     }
 
     // Outbound bridge calls show the Twilio number as caller_phone — don't use it as customer email
@@ -514,8 +522,13 @@ export async function logCallToGorgias(log) {
     const isOutboundBridge = log.caller_phone === TWILIO_NUMBER;
     const customerPhone = isOutboundBridge ? null : log.caller_phone;
 
+    // Callback target the agent should dial from the Gorgias ticket. Prefer the number Milo
+    // verified during the call (escalationPhone); fall back to caller ID. Never the company line.
+    const callbackPhone = [escalationPhone, customerPhone].find(p => p && p !== TWILIO_NUMBER) || null;
+    const callbackName = escalationName || customerName || null;
+
     const callerIdentifier = customerEmail || 'unknown@voice.call';
-    const callerLabel = customerName || customerPhone || 'Unknown caller';
+    const callerLabel = customerName || escalationName || customerPhone || 'Unknown caller';
 
     // Clean up transcript — dedupe streaming partials
     const turns = consolidateTranscript(log.transcript);
@@ -570,15 +583,21 @@ export async function logCallToGorgias(log) {
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : 'https://openclaw-production-ad38.up.railway.app';
     const setupPassword = process.env.SETUP_PASSWORD || '';
-    const callbackLink = customerPhone
-      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(customerPhone)}&name=${encodeURIComponent(callerLabel)}&s=${encodeURIComponent(setupPassword)}`
+    const callbackLink = callbackPhone
+      ? `${railwayHost}/voice/callback?to=${encodeURIComponent(callbackPhone)}&name=${encodeURIComponent(callbackName || callerLabel)}&s=${encodeURIComponent(setupPassword)}`
       : null;
+
+    // Note the caller ID only when it differs from the callback target, so the agent isn't misled.
+    const callerIdNote = customerPhone && customerPhone !== callbackPhone
+      ? `Called from: ${customerPhone}`
+      : '';
 
     const body = [
       'CUSTOMER',
       `Name: ${callerLabel}`,
       `Email: ${customerEmail || 'not collected'}`,
-      `Phone: ${customerPhone || 'not collected'}`,
+      `Phone: ${callbackPhone || customerPhone || 'not collected'}`,
+      callerIdNote,
       callbackLink ? `📞 Call Back: ${callbackLink}` : '',
       adminUrl ? `Order: ${adminUrl}` : '',
       '',
