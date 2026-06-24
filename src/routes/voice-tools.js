@@ -106,16 +106,21 @@ async function loop(path, options = {}) {
 async function findSubscription(order_number, customer_email) {
   let shopifyOrderId, shopifyCustomerId, customerName, orderTags;
 
-  // Step 1: Get Shopify order → extract IDs, customer name, and tags
-  const orderData = await shopify(
-    `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email,tags`
-  );
-  if (orderData.orders?.length) {
-    const o = orderData.orders[0];
-    shopifyOrderId = o.id;
-    shopifyCustomerId = o.customer?.id;
-    customerName = `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim();
-    orderTags = o.tags || '';
+  // Step 1: Get Shopify order → extract IDs, customer name, and tags.
+  // Only when we actually have an order number — querying with an undefined order number
+  // produced "orders.json?name=#undefined", which could match the wrong/most-recent order
+  // and resolve to a DIFFERENT customer's subscription (incident 2026-06-24).
+  if (order_number != null && String(order_number).trim() !== '') {
+    const orderData = await shopify(
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email,tags`
+    );
+    if (orderData.orders?.length) {
+      const o = orderData.orders[0];
+      shopifyOrderId = o.id;
+      shopifyCustomerId = o.customer?.id;
+      customerName = `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim();
+      orderTags = o.tags || '';
+    }
   }
 
   // Step 2: Best method — parse "Subscription #shopifyId" tag and look up directly
@@ -306,20 +311,24 @@ export async function get_subscription_details({ order_number, customer_email })
 }
 
 export async function cancel_subscription({ order_number, customer_email }) {
+  // SAFETY DISABLE (incident 2026-06-24): findSubscription could resolve to the WRONG
+  // customer's contract when called without a verified order number (the prompt has Milo
+  // cancel with email only → order_number undefined → "#undefined" order query → wrong sub).
+  // This silently cancelled unrelated customers' subscriptions (e.g. DJ McKenna, cancelled
+  // twice from other callers' requests). Until findSubscription verifies ownership, Milo must
+  // NOT cancel directly — it escalates to the team to cancel the correct subscription manually.
   try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    await loop(`/subscription/${loopId}/cancel`, {
-      method: 'POST',
-      body: JSON.stringify({
-        cancellationReason: 'Other',
-        cancellationComment: 'Customer requested cancellation via phone support',
-      }),
+    await notify_slack({
+      message: `CANCELLATION REQUEST — please cancel the correct subscription manually in Loop. Email: ${customer_email || 'not provided'}. Order: ${order_number || 'not provided'}. (Auto-cancel is disabled pending the wrong-subscription fix.)`,
+      urgent: true,
     });
-    return { success: true, message: `Subscription cancelled for ${customerName}. They'll receive a confirmation email.` };
   } catch (err) {
-    console.error('[tool] cancel_subscription:', err.message);
-    return { error: err.message };
+    console.error('[tool] cancel_subscription escalation failed:', err.message);
   }
+  return {
+    success: true,
+    message: "I've flagged this for our team to process your cancellation. They'll take care of it and send you a confirmation — you won't need to do anything else.",
+  };
 }
 
 export async function pause_subscription({ order_number, customer_email, pause_months = 1 }) {
