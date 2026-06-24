@@ -327,7 +327,7 @@ export async function cancel_subscription({ order_number, customer_email }) {
   }
   return {
     success: true,
-    message: "I've flagged this for our team to process your cancellation. They'll take care of it and send you a confirmation — you won't need to do anything else.",
+    message: "I'll escalate this to a member of our team to cancel your subscription — you'll receive a confirmation email once it's processed. You won't need to do anything else.",
   };
 }
 
