@@ -142,12 +142,12 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'update_order_address',
-      description: 'Update the shipping address on an unshipped order. Always read the full address back to the customer and confirm before calling. If the order has already shipped, this will return an error — use notify_slack instead.',
+      description: 'Request a shipping address change on an unshipped order. This does NOT change the address itself — it notes the order and escalates to the team; a human agent verifies and applies the new address before it ships. Collect the COMPLETE address (street number AND street name, unit, city, state, zip) and read it back to the customer before calling. A bare number with no street name (e.g. "2437 Unit 1") is NOT a complete address — ask for the street name. If the order has already shipped, this will return an error — use notify_slack instead.',
       parameters: {
         type: 'object',
         properties: {
           order_number: { type: 'string', description: 'Order number (with or without #)' },
-          address1: { type: 'string', description: 'Street address or PO Box (e.g. "PO Box 3614" or "123 Main St")' },
+          address1: { type: 'string', description: 'Street address with BOTH number and street name (e.g. "2437 South Boulevard"), or PO Box (e.g. "PO Box 3614")' },
           address2: { type: 'string', description: 'Apt, suite, unit (optional)' },
           city: { type: 'string', description: 'City' },
           province: { type: 'string', description: 'State or province name (e.g. "California")' },

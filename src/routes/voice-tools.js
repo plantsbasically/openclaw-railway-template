@@ -678,65 +678,53 @@ export async function cancel_order({ order_number, customer_email }) {
   }
 }
 
+// SAFETY CHANGE (2026-07-11): Milo no longer writes shipping addresses directly.
+// Two incidents drove this: (1) an incomplete spoken address ("2437 Unit Number 1" — no
+// street name) was saved verbatim and shipped to the wrong place, overwriting a human
+// agent's earlier correction (order 116037); (2) the Loop subscription side-effect used
+// findSubscription's unverified fallback and could overwrite a STRANGER's subscription
+// address — same wrong-contract class as the cancel bug. Now this tool tags + notes the
+// order and escalates urgently so a human agent verifies and applies the address.
 export async function update_order_address({ order_number, address1, address2 = '', city, province, zip, country_code = 'US' }) {
   try {
     const data = await shopify(
-      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,fulfillment_status,shipping_address,customer`
+      `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,note,tags,fulfillment_status,shipping_address,customer,email`
     );
     if (!data.orders?.length) return { found: false, message: `Order ${order_number} not found.` };
     const o = data.orders[0];
+    const customerName = `${o.customer?.first_name || ''} ${o.customer?.last_name || ''}`.trim();
+    const formatted = [address1, address2, city, province, zip].filter(Boolean).join(', ');
+    const adminUrl = `https://admin.shopify.com/store/plantsbasically/orders/${o.id}`;
+
     if (o.fulfillment_status === 'fulfilled') {
       return { success: false, message: `Order ${order_number} has already shipped — address cannot be changed. Notify the team to arrange a replacement to the correct address.` };
     }
-    const existing = o.shipping_address || {};
-    const firstName = existing.first_name || o.customer?.first_name || '';
-    const lastName = existing.last_name || o.customer?.last_name || '';
+
+    // Note + tag the order so anyone opening it sees the pending change
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const noteLine = `[${stamp} UTC] Customer called — change shipping address to: ${formatted} BEFORE shipping. (via Milo)`;
+    const newNote = o.note ? `${o.note}\n${noteLine}` : noteLine;
+    const tags = (o.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+    if (!tags.includes('address-change-requested')) tags.push('address-change-requested');
     await shopify(`orders/${o.id}.json`, {
       method: 'PUT',
-      body: JSON.stringify({
-        order: {
-          id: o.id,
-          shipping_address: {
-            first_name: firstName,
-            last_name: lastName,
-            address1,
-            address2,
-            city,
-            province,
-            zip,
-            country_code,
-          },
-        },
-      }),
+      body: JSON.stringify({ order: { id: o.id, note: newNote, tags: tags.join(', ') } }),
     });
-    const formatted = [address1, address2, city, province, zip].filter(Boolean).join(', ');
 
-    // Also update Loop subscription address so future recurring orders go to the same place
-    let subscriptionUpdated = false;
+    // Escalate to the team to verify + apply the address
     try {
-      const { loopId } = await findSubscription(order_number, null);
-      await loop(`/subscription/${loopId}/address`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          firstName,
-          lastName,
-          address1,
-          address2: address2 || '',
-          city,
-          provinceCode: toProvinceCode(province),
-          countryCode: country_code,
-          zip,
-        }),
+      await notify_slack({
+        message: `ADDRESS CHANGE REQUEST — order ${order_number} (${customerName}, ${o.email || 'no email'}) has NOT shipped yet. Customer wants it sent to: ${formatted}. Please verify the address is real/complete and update the order before it ships. ${adminUrl}`,
+        urgent: true,
       });
-      subscriptionUpdated = true;
     } catch (e) {
-      console.warn('[tool] update_order_address: Loop subscription address update skipped:', e.message);
+      console.error('[tool] update_order_address escalation failed:', e.message);
     }
 
-    const suffix = subscriptionUpdated
-      ? 'Updated on both this order and future subscription deliveries.'
-      : 'Updated on this order. No active subscription found, so no future orders affected.';
-    return { success: true, message: `Shipping address updated to: ${formatted}. ${suffix}` };
+    return {
+      success: true,
+      message: `I've flagged this for our team with the new address — an agent will verify it and update the order before it ships. You'll get a confirmation once it's changed. New address on file for the team: ${formatted}.`,
+    };
   } catch (err) {
     console.error('[tool] update_order_address:', err.message);
     return { error: err.message };
