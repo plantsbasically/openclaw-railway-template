@@ -331,45 +331,34 @@ export async function cancel_subscription({ order_number, customer_email }) {
   };
 }
 
-export async function pause_subscription({ order_number, customer_email, pause_months = 1 }) {
+// SAFETY (2026-07-11): ALL subscription mutations escalate to a human — Milo is
+// informational only. findSubscription's unverified fallback resolved WRONG customers'
+// contracts (cancel incident 2026-06-24, address incident 2026-07-11), so no Milo tool
+// may write to Loop until ownership verification exists. Pattern: Milo captures the
+// request + details, the team executes it manually in Loop.
+async function escalateSubscriptionRequest(action, { order_number, customer_email }, detail = '') {
   try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const resumeDate = new Date();
-    resumeDate.setMonth(resumeDate.getMonth() + Number(pause_months));
-    const body = {
-      pauseDuration: {
-        intervalType: 'MONTH',
-        intervalCount: Number(pause_months),
-      },
-    };
-    const result = await loop(`/subscription/${loopId}/pause`, { method: 'POST', body: JSON.stringify(body) });
-    console.log('[tool] pause_subscription loopId:', loopId, 'response:', JSON.stringify(result));
-    if (result?.success === false) {
-      return { success: false, loop_id: loopId, loop_response: result, message: result.message || 'Loop declined the pause.' };
-    }
-    return { success: true, loop_id: loopId, loop_response: result, message: `Subscription paused for ${customerName} for ${pause_months} month${Number(pause_months) > 1 ? 's' : ''}. Resumes around ${resumeDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.` };
+    await notify_slack({
+      message: `${action} REQUEST — please handle manually in Loop. Customer email: ${customer_email || 'not provided'}. Order: ${order_number || 'not provided'}.${detail ? ` ${detail}` : ''} (Milo subscription writes are disabled pending the wrong-subscription fix.)`,
+      urgent: true,
+    });
   } catch (err) {
-    console.error('[tool] pause_subscription:', err.message);
-    return { error: err.message };
+    console.error(`[tool] ${action} escalation failed:`, err.message);
   }
+  return {
+    success: true,
+    message: "I've sent this to a member of our team to take care of — you'll receive a confirmation email once it's processed. You won't need to do anything else.",
+  };
+}
+
+export async function pause_subscription({ order_number, customer_email, pause_months = 1 }) {
+  return escalateSubscriptionRequest('PAUSE SUBSCRIPTION', { order_number, customer_email },
+    `Pause for ${pause_months} month${Number(pause_months) > 1 ? 's' : ''}.`);
 }
 
 export async function reschedule_delivery({ order_number, customer_email, new_delivery_date }) {
-  try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const epoch = Math.floor(new Date(new_delivery_date).getTime() / 1000);
-    if (isNaN(epoch)) return { error: `Invalid date: ${new_delivery_date}. Use YYYY-MM-DD format.` };
-    const result = await loop(`/subscription/${loopId}/reschedule`, {
-      method: 'POST',
-      body: JSON.stringify({ newBillingDateEpoch: epoch, rescheduleFutureOrders: false }),
-    });
-    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the reschedule.' };
-    const formatted = new Date(new_delivery_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    return { success: true, message: `Next delivery rescheduled to ${formatted} for ${customerName}.` };
-  } catch (err) {
-    console.error('[tool] reschedule_delivery:', err.message);
-    return { error: err.message };
-  }
+  return escalateSubscriptionRequest('RESCHEDULE DELIVERY', { order_number, customer_email },
+    `New delivery date: ${new_delivery_date}.`);
 }
 
 export async function initiate_return({ order_number, customer_email, reason }) {
@@ -552,17 +541,17 @@ export async function logCallToGorgias(log) {
       lookup_account: 'Verified customer account',
       get_order_status: 'Pulled up order',
       get_subscription_details: 'Checked subscription',
-      cancel_subscription: 'Cancelled subscription',
-      pause_subscription: 'Paused subscription',
-      resume_subscription: 'Resumed subscription',
-      reschedule_delivery: 'Rescheduled delivery',
-      update_subscription_frequency: 'Changed subscription frequency',
-      change_subscription_bottles: 'Changed bottle quantity',
+      cancel_subscription: '🚨 Cancellation request sent to team',
+      pause_subscription: '🚨 Pause request sent to team',
+      resume_subscription: '🚨 Resume request sent to team',
+      reschedule_delivery: '🚨 Reschedule request sent to team',
+      update_subscription_frequency: '🚨 Frequency-change request sent to team',
+      change_subscription_bottles: '🚨 Bottle-quantity request sent to team',
       cancel_order: 'Cancelled order',
-      update_order_address: 'Updated shipping address',
+      update_order_address: '🚨 Address-change request sent to team',
       initiate_return: 'Initiated return',
       process_refund: 'Processed refund',
-      apply_discount: 'Applied retention discount',
+      apply_discount: '🚨 Discount request sent to team',
       notify_slack: '🚨 Escalated to team via Slack',
       send_portal_link: 'Sent subscription portal link',
     };
@@ -732,92 +721,25 @@ export async function update_order_address({ order_number, address1, address2 = 
 }
 
 export async function update_subscription_frequency({ order_number, customer_email, interval_count, interval = 'WEEK' }) {
-  try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const count = Number(interval_count);
-    const policy = { interval: interval.toUpperCase(), intervalCount: count };
-    const result = await loop(`/subscription/${loopId}/frequency`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        billingPolicy: policy,
-        deliveryPolicy: policy,
-        discountType: 'OLD',
-      }),
-    });
-    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the frequency update.' };
-    const label = `every ${count} ${interval.toLowerCase()}${count > 1 ? 's' : ''}`;
-    return { success: true, message: `Subscription updated to ${label} for ${customerName}.` };
-  } catch (err) {
-    console.error('[tool] update_subscription_frequency:', err.message);
-    return { error: err.message };
-  }
+  const count = Number(interval_count);
+  return escalateSubscriptionRequest('CHANGE SUBSCRIPTION FREQUENCY', { order_number, customer_email },
+    `New cadence: every ${count} ${interval.toLowerCase()}${count > 1 ? 's' : ''}.`);
 }
 
 export async function apply_discount({ order_number, customer_email, percent = 5, orders = 1 }) {
-  try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const result = await loop(`/subscription/${loopId}/discount`, {
-      method: 'POST',
-      body: JSON.stringify({
-        manualDiscount: {
-          title: `Milo retention discount`,
-          type: 'PERCENTAGE',
-          value: Number(percent),
-          orderLimit: Number(orders),
-          lineIds: [],
-        },
-      }),
-    });
-    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the discount.' };
-    return { success: true, message: `${percent}% discount applied to ${customerName}'s next ${orders} order${orders > 1 ? 's' : ''}.` };
-  } catch (err) {
-    console.error('[tool] apply_discount:', err.message);
-    return { error: err.message };
-  }
+  return escalateSubscriptionRequest('APPLY RETENTION DISCOUNT', { order_number, customer_email },
+    `${percent}% off the next ${orders} order${orders > 1 ? 's' : ''} (retention save).`);
 }
 
 export async function resume_subscription({ order_number, customer_email }) {
-  try {
-    const { loopId, customerName } = await findSubscription(order_number, customer_email);
-    const result = await loop(`/subscription/${loopId}/resume`, { method: 'POST' });
-    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the resume.' };
-    return { success: true, message: `Subscription resumed for ${customerName}. Billing will restart on the original schedule.` };
-  } catch (err) {
-    console.error('[tool] resume_subscription:', err.message);
-    return { error: err.message };
-  }
+  return escalateSubscriptionRequest('RESUME SUBSCRIPTION', { order_number, customer_email });
 }
 
 export async function change_subscription_bottles({ order_number, customer_email, bottles }) {
-  try {
-    const count = Number(bottles);
-    if (![1, 2, 3].includes(count)) return { error: 'bottles must be 1, 2, or 3.' };
-
-    const { loopId, customerName, subscription } = await findSubscription(order_number, customer_email);
-    const line = subscription.lines?.[0];
-    if (!line) return { error: 'No line items found on subscription.' };
-
-    const lineId = line.id;
-    const productId = line.productShopifyId;
-    if (!productId) return { error: 'Could not determine product from subscription line.' };
-
-    // Find the variant whose title matches the requested bottle count
-    const variantsData = await shopify(`products/${productId}/variants.json`);
-    const target = variantsData.variants?.find(v =>
-      (v.title || '').toLowerCase().includes(`${count} bottle`)
-    );
-    if (!target) return { error: `No ${count}-bottle variant found for this product.` };
-
-    const result = await loop(`/subscription/${loopId}/line/${lineId}/swap`, {
-      method: 'PUT',
-      body: JSON.stringify({ variantShopifyId: target.id, quantity: 1, pricingType: 'OLD' }),
-    });
-    if (result?.success === false) return { success: false, message: result.message || 'Loop declined the swap.' };
-    return { success: true, message: `Subscription updated to ${count} bottle${count > 1 ? 's' : ''} per delivery for ${customerName}.` };
-  } catch (err) {
-    console.error('[tool] change_subscription_bottles:', err.message);
-    return { error: err.message };
-  }
+  const count = Number(bottles);
+  if (![1, 2, 3].includes(count)) return { error: 'bottles must be 1, 2, or 3.' };
+  return escalateSubscriptionRequest('CHANGE BOTTLE QUANTITY', { order_number, customer_email },
+    `New quantity: ${count} bottle${count > 1 ? 's' : ''} per delivery.`);
 }
 
 const TOOLS = {

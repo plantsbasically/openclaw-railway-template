@@ -59,17 +59,17 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'pause_subscription',
-      description: 'Pause a subscription. Use order_number — never ask the customer for a subscription ID.',
+      description: 'Request a subscription pause. This does NOT pause anything itself — it sends the request to the team, who applies it and emails a confirmation. Use order_number — never ask the customer for a subscription ID.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, pause_months: { type: 'number', description: "Number of months to pause, e.g. 1, 2, or 3. Default 1." } }, required: ['order_number'] }
     },
     {
       type: 'function', name: 'reschedule_delivery',
-      description: 'Reschedule the next delivery. Use order_number — never ask the customer for a subscription ID.',
+      description: 'Request a reschedule of the next delivery. This does NOT reschedule anything itself — it sends the request to the team, who applies it and emails a confirmation. Use order_number — never ask the customer for a subscription ID.',
       parameters: { type: 'object', properties: { order_number: { type: 'string', description: 'Order number' }, customer_email: { type: 'string', description: "Customer email (fallback)" }, new_delivery_date: { type: 'string', description: "New billing date in YYYY-MM-DD format, e.g. '2026-08-01'. Confirm the date with the customer before calling." } }, required: ['order_number', 'new_delivery_date'] }
     },
     {
       type: 'function', name: 'resume_subscription',
-      description: 'Resume a paused subscription early. Use when a customer paused but wants to restart before the pause period ends.',
+      description: 'Request an early resume of a paused subscription. This does NOT resume anything itself — it sends the request to the team, who applies it and emails a confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -81,7 +81,7 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'change_subscription_bottles',
-      description: 'Change how many bottles the customer receives per subscription delivery by swapping to the 1, 2, or 3 bottle variant. Use when a customer says they want more or fewer bottles.',
+      description: 'Request a change to how many bottles the customer receives per delivery (1, 2, or 3). This does NOT change anything itself — it sends the request to the team, who applies it and emails a confirmation.',
       parameters: {
         type: 'object',
         properties: {
@@ -94,7 +94,7 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'update_subscription_frequency',
-      description: 'Change how often a subscription renews. Use for retention — offer every 8 weeks before cancelling. Confirm the new cadence with the customer before calling.',
+      description: 'Request a change to how often a subscription renews. This does NOT change anything itself — it sends the request to the team, who applies it and emails a confirmation. Use for retention — offer every 8 weeks before cancelling. Confirm the new cadence with the customer before calling.',
       parameters: {
         type: 'object',
         properties: {
@@ -123,7 +123,7 @@ const SESSION_CONFIG = {
     },
     {
       type: 'function', name: 'apply_discount',
-      description: 'Apply a percentage discount to a subscription as a retention save. Use before cancelling — offer this alongside pause/cadence change.',
+      description: 'Request a retention discount on a subscription. This does NOT apply anything itself — it sends the request to the team, who applies it and emails a confirmation. Use before cancelling — offer this alongside pause/cadence change.',
       parameters: {
         type: 'object',
         properties: {
