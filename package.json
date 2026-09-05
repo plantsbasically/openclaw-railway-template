@@ -9,7 +9,7 @@
   "dev": "node src/server.js",
   "start": "node src/server.js",
   "lint": "node -c src/server.js",
-  "test": "node --test src/*.test.mjs",
+  "test": "node --test src/*.test.mjs src/routes/*.test.mjs",
   "sync-milo": "node scripts/sync-milo-docs.js"
 },
 "dependencies": {

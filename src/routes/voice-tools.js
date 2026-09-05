@@ -99,17 +99,80 @@ async function loop(path, options = {}) {
   return res.json();
 }
 
-// Find Loop internal subscription ID from an order number.
-// Priority: Shopify order tag "Subscription #shopifyId" → direct Loop lookup via shopify-{id}
-// Falls back to originOrderShopifyId, then customerShopifyId.
-// Returns { loopId, customerName, shopifyCustomerId }
+// Find a customer's Loop subscription — ownership-verified.
+//
+// CRITICAL (incident 2026-09-04): Loop's LIST endpoint ignores customer filters.
+// `/subscription?customerShopifyId=X` returns page 1 of EVERY subscription in the
+// store regardless of X (verified: a bogus id returns the same 50 rows as no filter),
+// so the old `subs.find(active) || subs[0]` fallback handed out a random customer's
+// contract. For six days straight every subscription lookup returned the same
+// stranger's data ("every 4 weeks, $55.00, October 8 2026") — that is also what made
+// the 2026-06-24 wrong-cancellation incident possible.
+//
+// Only two resolution paths are trustworthy, and both are proven by test:
+//   1. Shopify order tag "Subscription #<shopifyId>" → GET /subscription/shopify-<id>
+//      (a direct document fetch, not a filtered list)
+//   2. `/subscription?originOrderShopifyId=<id>` — this filter IS honoured
+// Everything resolved is then checked against the customer we are actually helping.
+// If ownership cannot be proven we return nothing; we never guess.
+//
+// Returns { loopId, subscription, customerName, shopifyCustomerId }
+
+function subscriptionOwner(sub) {
+  const c = sub?.customer || {};
+  return { shopifyId: c.shopifyId != null ? String(c.shopifyId) : null, email: (c.email || '').toLowerCase() };
+}
+
+export function ownsSubscription(sub, { shopifyCustomerId, customer_email }) {
+  const owner = subscriptionOwner(sub);
+  if (shopifyCustomerId && owner.shopifyId && owner.shopifyId === String(shopifyCustomerId)) return true;
+  if (customer_email && owner.email && owner.email === String(customer_email).toLowerCase()) return true;
+  return false;
+}
+
+// Pull "Subscription #<shopifyId>" ids out of a set of Shopify orders, newest first.
+export function subscriptionIdsFromOrders(orders) {
+  const ids = [];
+  for (const o of orders || []) {
+    for (const tag of (o.tags || '').split(',')) {
+      const t = tag.trim();
+      if (t.startsWith('Subscription #')) {
+        const id = t.replace('Subscription #', '').trim();
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    }
+  }
+  return ids;
+}
+
+// Fetch candidate subscriptions by Shopify subscription id and return the best one
+// the customer actually owns — preferring an ACTIVE contract over a cancelled one.
+async function resolveOwnedSubscription(shopifySubIds, identity) {
+  let fallback = null;
+  for (const shopifySubId of shopifySubIds.slice(0, 10)) {
+    let sub;
+    try {
+      const data = await loop(`/subscription/shopify-${shopifySubId}`);
+      sub = data?.data;
+    } catch (e) {
+      console.warn(`[loop] subscription shopify-${shopifySubId} lookup failed:`, e.message);
+      continue;
+    }
+    if (!sub?.id) continue;
+    if (!ownsSubscription(sub, identity)) {
+      console.warn(`[loop] REJECTED shopify-${shopifySubId} — belongs to ${subscriptionOwner(sub).email || 'unknown'}, not this caller`);
+      continue;
+    }
+    if (sub.status?.toLowerCase() === 'active') return sub;
+    if (!fallback) fallback = sub;
+  }
+  return fallback;
+}
+
 async function findSubscription(order_number, customer_email) {
   let shopifyOrderId, shopifyCustomerId, customerName, orderTags;
 
-  // Step 1: Get Shopify order → extract IDs, customer name, and tags.
-  // Only when we actually have an order number — querying with an undefined order number
-  // produced "orders.json?name=#undefined", which could match the wrong/most-recent order
-  // and resolve to a DIFFERENT customer's subscription (incident 2026-06-24).
+  // Step 1: Resolve the order (when we have one) → customer identity + subscription tag.
   if (order_number != null && String(order_number).trim() !== '') {
     const orderData = await shopify(
       `orders.json?name=${encodeURIComponent(orderName(order_number))}&status=any&fields=id,name,customer,email,tags`
@@ -123,28 +186,52 @@ async function findSubscription(order_number, customer_email) {
     }
   }
 
-  // Step 2: Best method — parse "Subscription #shopifyId" tag and look up directly
-  // Loop accepts shopify-{shopifyId} path format per API docs
-  const subTag = orderTags?.split(',').map(t => t.trim()).find(t => t.startsWith('Subscription #'));
-  if (subTag) {
-    const shopifySubId = subTag.replace('Subscription #', '').trim();
-    try {
-      const data = await loop(`/subscription/shopify-${shopifySubId}`);
-      const sub = data?.data;
-      if (sub?.id) {
-        console.log('[loop] found via order tag shopify-' + shopifySubId + ' → loopId', sub.id);
-        return { loopId: sub.id, subscription: sub, customerName, shopifyCustomerId };
-      }
-    } catch (e) {
-      console.warn('[loop] shopify subscription tag lookup failed:', e.message);
+  // Step 2: Identify the customer by email when the order didn't give us one.
+  if (!shopifyCustomerId && customer_email) {
+    const custData = await shopify(
+      `customers/search.json?query=email:${encodeURIComponent(customer_email)}&fields=id,first_name,last_name`
+    );
+    const c = custData.customers?.[0];
+    if (c) {
+      shopifyCustomerId = c.id;
+      customerName = customerName || `${c.first_name || ''} ${c.last_name || ''}`.trim();
     }
   }
 
-  // Step 3: Fall back to originOrderShopifyId
+  const identity = { shopifyCustomerId, customer_email };
+  if (!shopifyCustomerId && !customer_email) {
+    throw new Error('No customer identified — need an order number or email before looking up a subscription');
+  }
+
+  // Step 3: Subscription tag on the caller's own order — the most direct route.
+  const tagIds = subscriptionIdsFromOrders([{ tags: orderTags }]);
+  if (tagIds.length) {
+    const sub = await resolveOwnedSubscription(tagIds, identity);
+    if (sub) return { loopId: sub.id, subscription: sub, customerName, shopifyCustomerId };
+  }
+
+  // Step 4: Scan the customer's own order history for subscription tags. This is how an
+  // email-only lookup finds the RIGHT contract — no unfiltered list query involved.
+  if (shopifyCustomerId) {
+    try {
+      const hist = await shopify(
+        `orders.json?customer_id=${shopifyCustomerId}&status=any&limit=50&fields=id,name,created_at,tags`
+      );
+      const ids = subscriptionIdsFromOrders(hist.orders);
+      if (ids.length) {
+        const sub = await resolveOwnedSubscription(ids, identity);
+        if (sub) return { loopId: sub.id, subscription: sub, customerName, shopifyCustomerId };
+      }
+    } catch (e) {
+      console.warn('[shopify] customer order-history lookup failed:', e.message);
+    }
+  }
+
+  // Step 5: originOrderShopifyId — this Loop filter is honoured, but still verify ownership.
   if (shopifyOrderId) {
     try {
       const data = await loop(`/subscription?originOrderShopifyId=${shopifyOrderId}`);
-      const subs = toArray(data);
+      const subs = toArray(data).filter(s => ownsSubscription(s, identity));
       const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
       if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId };
     } catch (e) {
@@ -152,27 +239,10 @@ async function findSubscription(order_number, customer_email) {
     }
   }
 
-  // Step 3: Fall back to customer's Shopify ID
-  if (shopifyCustomerId) {
-    const data = await loop(`/subscription?customerShopifyId=${shopifyCustomerId}`);
-    const subs = toArray(data);
-    const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
-    if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId };
-  }
-
-  // Step 4: Last resort — look up by email if provided
-  if (customer_email) {
-    const custData = await shopify(`customers/search.json?query=email:${encodeURIComponent(customer_email)}&fields=id`);
-    if (custData.customers?.length) {
-      const custId = custData.customers[0].id;
-      const data = await loop(`/subscription?customerShopifyId=${custId}`);
-      const subs = toArray(data);
-      const active = subs.find(s => s.status?.toLowerCase() === 'active') || subs[0];
-      if (active?.id) return { loopId: active.id, subscription: active, customerName, shopifyCustomerId: custId };
-    }
-  }
-
-  throw new Error(`No subscription found for order ${order_number}`);
+  // Nothing we can prove belongs to this customer. Never fall back to a list query.
+  throw new Error(
+    `No subscription found for ${customer_email || `order ${order_number}`}. Do not guess — tell the customer you can't see a subscription on the account and escalate.`
+  );
 }
 
 function toArray(data) {
@@ -749,8 +819,25 @@ const TOOLS = {
   change_subscription_bottles, update_order_address, send_portal_link, notify_slack,
 };
 
+// Names the model reaches for that aren't real server tools. xAI sometimes invents
+// `collections_search` when it means its own built-in file_search over the product docs
+// (seen 4x in 50 calls, 2026-09-04). A bare "Unknown tool" error left Milo improvising an
+// answer mid-call, so say plainly what to do instead of failing blank.
+const PHANTOM_TOOLS = {
+  collections_search: "That tool does not exist here. Product and ingredient knowledge is in your own file search — use that. If you still do not know the answer, say you are not certain and offer to have the team follow up. Never guess at product facts, policies, or anything about the customer's account.",
+  search: 'That tool does not exist here. Use your own file search for product knowledge, or the account tools for customer data.',
+  web_search: 'That tool does not exist here. Use your own file search for product knowledge, or the account tools for customer data.',
+};
+
 export async function runTool(name, args) {
   const fn = TOOLS[name];
-  if (!fn) return { error: `Unknown tool: ${name}` };
+  if (!fn) {
+    const guidance = PHANTOM_TOOLS[name];
+    if (guidance) {
+      console.warn(`[tool] phantom tool called: ${name}`);
+      return { error: guidance };
+    }
+    return { error: `Unknown tool: ${name}. Do not guess — tell the customer you'll have the team follow up.` };
+  }
   return fn(args);
 }
