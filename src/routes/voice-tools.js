@@ -517,6 +517,49 @@ export async function send_portal_link({ customer_email, customer_name }) {
   }
 }
 
+// 90 Day Disc Protocol ebook — retention offer (SOP: "90 DAY DISC PROTOCOL EBOOK - RETENTION SOP").
+// Free digital ebook, $24.99 value. The product is deliberately kept off the storefront —
+// this cart link is the only way to get it, and the discount code zeroes the price.
+// Verified 2026-09-04: the link resolves to a live checkout showing 90DAYDISC-FREE (-$24.99) → $0.00.
+const EBOOK_LINK = 'https://plantsbasically.com/cart/55121222631743:1?discount=90DAYDISC-FREE';
+
+export async function send_ebook({ customer_email, customer_name }) {
+  if (!customer_email) {
+    return { error: "No email on file — ask the customer for their email address before offering the ebook, or escalate so the team can send it." };
+  }
+  try {
+    const name = customer_name?.split(' ')[0] || 'there';
+    await gorgias('/api/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        channel: 'email',
+        via: 'helpdesk',
+        from_agent: true,
+        customer: { email: customer_email, name: customer_name || customer_email },
+        subject: 'Your free 90 Day Disc Protocol ebook',
+        // SOP: tag every ticket where the ebook is offered
+        tags: [{ name: 'voice-call' }, { name: 'ebook-retention' }],
+        messages: [{
+          channel: 'email',
+          via: 'helpdesk',
+          from_agent: true,
+          public: true,
+          body_text: `Hi ${name},\n\nAs promised, here's your free copy of the 90 Day Disc Protocol. It walks through exactly how to get the most out of Juicy Joint, step by step, over 90 days.\n\n${EBOOK_LINK}\n\nThe link already has it set to free — just go through the checkout and it's yours. Normally $24.99.\n\nIf you have any questions as you work through it, just reply to this email.\n\n— The Plants Basically Team`,
+          sender: { email: GORGIAS_EMAIL, name: 'Plants Basically' },
+          receiver: { email: customer_email },
+        }],
+      }),
+    });
+    return {
+      success: true,
+      message: `90 Day Disc Protocol ebook sent to ${customer_email}. Tell the customer it's on its way to their inbox now.`,
+    };
+  } catch (err) {
+    console.error('[tool] send_ebook:', err.message);
+    return { error: err.message };
+  }
+}
+
 export async function notify_slack({ message, urgent = false, callback_phone = null, callback_name = null }) {
   try {
     let callbackLine = '';
@@ -816,7 +859,7 @@ const TOOLS = {
   lookup_account, lookup_by_name, get_order_status, get_subscription_details,
   cancel_subscription, pause_subscription, resume_subscription, reschedule_delivery,
   initiate_return, process_refund, cancel_order, apply_discount, update_subscription_frequency,
-  change_subscription_bottles, update_order_address, send_portal_link, notify_slack,
+  change_subscription_bottles, update_order_address, send_portal_link, send_ebook, notify_slack,
 };
 
 // Names the model reaches for that aren't real server tools. xAI sometimes invents

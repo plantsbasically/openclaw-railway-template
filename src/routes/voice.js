@@ -170,6 +170,18 @@ const SESSION_CONFIG = {
       }
     },
     {
+      type: 'function', name: 'send_ebook',
+      description: "Email the customer their free 90 Day Disc Protocol ebook ($24.99 value) and tag the ticket ebook-retention. Use as a retention offer when a subscriber wants to cancel or says the product isn't working, and as a goodwill gesture when fixing a bad experience. Sends immediately during the call — do not promise the team will follow up with it.",
+      parameters: {
+        type: 'object',
+        properties: {
+          customer_email: { type: 'string', description: "Customer's email address — required to send it" },
+          customer_name: { type: 'string', description: "Customer's full name" },
+        },
+        required: ['customer_email']
+      }
+    },
+    {
       type: 'function', name: 'notify_slack',
       description: 'Send a message to the Plants Basically team in Slack. Use for escalations that need immediate human attention.',
       parameters: {
